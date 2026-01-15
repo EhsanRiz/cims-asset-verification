@@ -26,42 +26,65 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-4d-light">
-      {/* Header */}
+    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#f0f7fa' }}>
+      {/* Top Partner Logos Bar */}
+      <div className="bg-white border-b">
+        <div className="max-w-7xl mx-auto px-4 py-2">
+          <div className="flex items-center justify-center gap-6">
+            <img src="/logo-lesotho.png" alt="Lesotho" className="h-8 object-contain" />
+            <img src="/logo-llwdp.png" alt="LLWDP III" className="h-8 object-contain" />
+            <img src="/logo-afdb.png" alt="AfDB" className="h-6 object-contain" />
+          </div>
+        </div>
+      </div>
+
+      {/* Main Header */}
       <header className="bg-white shadow-sm border-b sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4">
           <div className="flex items-center justify-between h-16">
             {/* Logo & Title */}
             <div className="flex items-center gap-3">
-              <img src="/logo-4d.png" alt="4D" className="h-10" />
-              <div className="hidden sm:block">
-                <h1 className="text-lg font-bold text-4d-gray leading-tight">CIMS</h1>
-                <p className="text-xs text-gray-500 leading-tight">Asset Registration & Verification</p>
+              <div>
+                <h1 className="text-xl font-bold" style={{ color: '#0088c4' }}>CIMS</h1>
+                <p className="text-xs" style={{ color: '#8cc63f' }}>Asset Registration & Verification</p>
               </div>
             </div>
 
             {/* Desktop Navigation */}
             <nav className="hidden md:flex items-center gap-1">
-              {tabs.map(tab => (
-                <button
-                  key={tab.id}
-                  onClick={() => navigate(tab.path)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
-                    currentTab.id === tab.id
-                      ? 'bg-4d-blue text-white'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  <tab.icon size={18} />
-                  <span className="font-medium">{tab.label}</span>
-                </button>
-              ))}
+              {tabs.map(tab => {
+                const isActive = currentTab.id === tab.id
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => navigate(tab.path)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg transition font-medium"
+                    style={{ 
+                      backgroundColor: isActive ? '#0088c4' : 'transparent',
+                      color: isActive ? 'white' : '#555'
+                    }}
+                    onMouseOver={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = '#e8f4f8'
+                      }
+                    }}
+                    onMouseOut={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = 'transparent'
+                      }
+                    }}
+                  >
+                    <tab.icon size={18} />
+                    <span>{tab.label}</span>
+                  </button>
+                )
+              })}
             </nav>
 
             {/* User Menu */}
             <div className="flex items-center gap-3">
               <div className="hidden sm:block text-right">
-                <p className="text-sm font-medium text-4d-gray">{user?.full_name}</p>
+                <p className="text-sm font-medium" style={{ color: '#333' }}>{user?.full_name}</p>
                 <p className="text-xs text-gray-500">{user?.role}</p>
               </div>
               <button
@@ -86,40 +109,32 @@ export default function Dashboard() {
         {/* Mobile Navigation */}
         {mobileMenuOpen && (
           <nav className="md:hidden border-t bg-white px-4 py-2">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => {
-                  navigate(tab.path)
-                  setMobileMenuOpen(false)
-                }}
-                className={`flex items-center gap-3 w-full px-4 py-3 rounded-lg transition ${
-                  currentTab.id === tab.id
-                    ? 'bg-4d-blue text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <tab.icon size={20} />
-                <span className="font-medium">{tab.label}</span>
-              </button>
-            ))}
+            {tabs.map(tab => {
+              const isActive = currentTab.id === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    navigate(tab.path)
+                    setMobileMenuOpen(false)
+                  }}
+                  className="flex items-center gap-3 w-full px-4 py-3 rounded-lg transition"
+                  style={{ 
+                    backgroundColor: isActive ? '#0088c4' : 'transparent',
+                    color: isActive ? 'white' : '#555'
+                  }}
+                >
+                  <tab.icon size={20} />
+                  <span className="font-medium">{tab.label}</span>
+                </button>
+              )
+            })}
           </nav>
         )}
       </header>
 
-      {/* Partner Logos Bar */}
-      <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 py-2">
-          <div className="flex items-center justify-center gap-6 opacity-70">
-            <img src="/logo-lesotho.png" alt="Lesotho" className="h-8" />
-            <img src="/logo-llwdp.png" alt="LLWDP III" className="h-8" />
-            <img src="/logo-afdb.png" alt="AfDB" className="h-6" />
-          </div>
-        </div>
-      </div>
-
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      <main className="flex-1 max-w-7xl mx-auto px-4 py-6 w-full">
         <Routes>
           <Route path="/" element={<AllDataTab />} />
           <Route path="/personal" element={<PersonalAssetTab />} />
@@ -131,9 +146,13 @@ export default function Dashboard() {
       {/* Footer */}
       <footer className="bg-white border-t mt-auto">
         <div className="max-w-7xl mx-auto px-4 py-4">
-          <p className="text-center text-xs text-gray-500">
-            Lesotho Lowlands Water Development Project Phase III • Compensation Information Management System
-          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <img src="/logo-4d.png" alt="4D Climate Solutions" className="h-8" />
+            <p className="text-xs text-gray-500 text-center">
+              Developed by <span style={{ color: '#0088c4', fontWeight: '600' }}>4D Climate Solutions</span> for 
+              <span style={{ color: '#8cc63f', fontWeight: '600' }}> LLWDP III</span> Project
+            </p>
+          </div>
         </div>
       </footer>
     </div>
