@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../App'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
-import { Database, User, Users, LogOut, Menu, X } from 'lucide-react'
+import { Database, User, Users, LogOut, RefreshCw } from 'lucide-react'
 import AllDataTab from '../components/AllDataTab'
 import PersonalAssetTab from '../components/PersonalAssetTab'
 import CommunalAssetTab from '../components/CommunalAssetTab'
@@ -10,10 +10,9 @@ export default function Dashboard() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const tabs = [
-    { id: 'all', label: 'All Data', icon: Database, path: '/' },
+    { id: 'all', label: 'Dashboard', icon: Database, path: '/' },
     { id: 'personal', label: 'Personal Asset', icon: User, path: '/personal' },
     { id: 'communal', label: 'Communal Asset', icon: Users, path: '/communal' },
   ]
@@ -26,115 +25,81 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#f0f7fa' }}>
-      {/* Top Partner Logos Bar */}
-      <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 py-2">
-          <div className="flex items-center justify-center gap-6">
-            <img src="/logo-lesotho.png" alt="Lesotho" className="h-8 object-contain" />
-            <img src="/logo-llwdp.png" alt="LLWDP III" className="h-8 object-contain" />
-            <img src="/logo-afdb.png" alt="AfDB" className="h-6 object-contain" />
-          </div>
-        </div>
-      </div>
-
-      {/* Main Header */}
-      <header className="bg-white shadow-sm border-b sticky top-0 z-50">
+    <div className="min-h-screen" style={{ backgroundColor: '#f8fafb' }}>
+      {/* Top Header Bar - Green like Rekisa */}
+      <header 
+        className="sticky top-0 z-50 shadow-sm"
+        style={{ backgroundColor: '#0088c4' }}
+      >
         <div className="max-w-7xl mx-auto px-4">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center justify-between h-14">
             {/* Logo & Title */}
             <div className="flex items-center gap-3">
-              <div>
-                <h1 className="text-xl font-bold" style={{ color: '#0088c4' }}>CIMS</h1>
-                <p className="text-xs" style={{ color: '#8cc63f' }}>Asset Registration & Verification</p>
+              <div className="w-9 h-9 bg-white bg-opacity-20 rounded-lg flex items-center justify-center">
+                <img src="/logo-llwdp.png" alt="CIMS" className="w-6 h-6 object-contain" />
               </div>
+              <span className="text-white font-semibold text-lg">CIMS</span>
             </div>
 
-            {/* Desktop Navigation */}
-            <nav className="hidden md:flex items-center gap-1">
-              {tabs.map(tab => {
-                const isActive = currentTab.id === tab.id
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => navigate(tab.path)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg transition font-medium"
-                    style={{ 
-                      backgroundColor: isActive ? '#0088c4' : 'transparent',
-                      color: isActive ? 'white' : '#555'
-                    }}
-                    onMouseOver={(e) => {
-                      if (!isActive) {
-                        e.currentTarget.style.backgroundColor = '#e8f4f8'
-                      }
-                    }}
-                    onMouseOut={(e) => {
-                      if (!isActive) {
-                        e.currentTarget.style.backgroundColor = 'transparent'
-                      }
-                    }}
-                  >
-                    <tab.icon size={18} />
-                    <span>{tab.label}</span>
-                  </button>
-                )
-              })}
-            </nav>
-
-            {/* User Menu */}
+            {/* Right side */}
             <div className="flex items-center gap-3">
-              <div className="hidden sm:block text-right">
-                <p className="text-sm font-medium" style={{ color: '#333' }}>{user?.full_name}</p>
-                <p className="text-xs text-gray-500">{user?.role}</p>
+              <button 
+                className="p-2 text-white text-opacity-80 hover:text-opacity-100 hover:bg-white hover:bg-opacity-10 rounded-lg transition"
+                onClick={() => window.location.reload()}
+              >
+                <RefreshCw size={20} />
+              </button>
+              
+              {/* User Avatar */}
+              <div className="flex items-center gap-2">
+                <div 
+                  className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold"
+                  style={{ backgroundColor: '#8cc63f', color: 'white' }}
+                >
+                  {user?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U'}
+                </div>
+                <span className="text-white text-sm hidden sm:block">{user?.full_name}</span>
               </div>
+
               <button
                 onClick={handleLogout}
-                className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                className="p-2 text-white text-opacity-80 hover:text-opacity-100 hover:bg-white hover:bg-opacity-10 rounded-lg transition"
                 title="Sign Out"
               >
                 <LogOut size={20} />
               </button>
-              
-              {/* Mobile menu button */}
-              <button
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-              >
-                {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-              </button>
             </div>
           </div>
         </div>
+      </header>
 
-        {/* Mobile Navigation */}
-        {mobileMenuOpen && (
-          <nav className="md:hidden border-t bg-white px-4 py-2">
+      {/* Navigation Tabs */}
+      <nav className="bg-white border-b border-gray-200 sticky top-14 z-40">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex items-center gap-1 overflow-x-auto">
             {tabs.map(tab => {
               const isActive = currentTab.id === tab.id
               return (
                 <button
                   key={tab.id}
-                  onClick={() => {
-                    navigate(tab.path)
-                    setMobileMenuOpen(false)
-                  }}
-                  className="flex items-center gap-3 w-full px-4 py-3 rounded-lg transition"
+                  onClick={() => navigate(tab.path)}
+                  className="flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap border-b-2"
                   style={{ 
-                    backgroundColor: isActive ? '#0088c4' : 'transparent',
-                    color: isActive ? 'white' : '#555'
+                    borderColor: isActive ? '#0088c4' : 'transparent',
+                    color: isActive ? '#0088c4' : '#6b7280'
                   }}
                 >
-                  <tab.icon size={20} />
-                  <span className="font-medium">{tab.label}</span>
+                  <tab.icon size={18} />
+                  <span>{tab.label}</span>
                 </button>
               )
             })}
-          </nav>
-        )}
-      </header>
+          </div>
+        </div>
+      </nav>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl mx-auto px-4 py-6 w-full">
+      <main className="max-w-7xl mx-auto px-4 py-6">
         <Routes>
           <Route path="/" element={<AllDataTab />} />
           <Route path="/personal" element={<PersonalAssetTab />} />
@@ -144,14 +109,13 @@ export default function Dashboard() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-white border-t mt-auto">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <img src="/logo-4d.png" alt="4D Climate Solutions" className="h-8" />
-            <p className="text-xs text-gray-500 text-center">
-              Developed by <span style={{ color: '#0088c4', fontWeight: '600' }}>4D Climate Solutions</span> for 
-              <span style={{ color: '#8cc63f', fontWeight: '600' }}> LLWDP III</span> Project
-            </p>
+      <footer className="bg-white border-t border-gray-100 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-center gap-2">
+            <img src="/logo-4d.png" alt="4D" className="h-5 opacity-60" />
+            <span className="text-xs text-gray-400">
+              Developed by <span style={{ color: '#0088c4' }}>4D Climate Solutions</span> for LLWDP III
+            </span>
           </div>
         </div>
       </footer>

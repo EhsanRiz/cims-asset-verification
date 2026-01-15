@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { getHouseholds, getVillages, getRoutes } from '../lib/supabase'
 import { 
   Search, ChevronDown, ChevronRight, Users, Home, 
-  FileText, Filter, Download, AlertCircle, CheckCircle,
-  Clock, MapPin, Phone, CreditCard
+  FileText, Download, AlertCircle, MapPin, Phone, 
+  Calendar, CheckCircle, Clock, XCircle
 } from 'lucide-react'
 
 export default function AllDataTab() {
@@ -69,34 +69,11 @@ export default function AllDataTab() {
     setExpandedRows(newExpanded)
   }
 
-  const getCompleteness = (household) => {
-    let total = 10
-    let filled = 0
-    if (household.household_head_first_name) filled++
-    if (household.household_head_surname) filled++
-    if (household.id_number) filled++
-    if (household.cellphone_no) filled++
-    if (household.hh_original_village_name) filled++
-    if (household.hh_residential_village) filled++
-    if (household.community_council) filled++
-    if (household.photograph_of_pap_url) filled++
-    if (household.id_document_url) filled++
-    if (household.household_assets?.length > 0) filled++
-    return Math.round((filled / total) * 100)
-  }
-
-  const getStatusBadge = (status) => {
-    const styles = {
-      approved: 'bg-green-100 text-green-700',
-      pending: 'bg-yellow-100 text-yellow-700',
-      rejected: 'bg-red-100 text-red-700'
-    }
-    return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status] || styles.pending}`}>
-        {status || 'pending'}
-      </span>
-    )
-  }
+  // Stats calculations
+  const totalHouseholds = households.length
+  const approvedCount = households.filter(h => h.approval_status === 'approved').length
+  const pendingCount = households.filter(h => h.approval_status === 'pending' || !h.approval_status).length
+  const totalAssets = households.reduce((acc, h) => acc + (h.household_assets?.length || 0), 0)
 
   const exportCSV = () => {
     const headers = ['Name', 'ID Number', 'Village', 'Phone', 'Assets', 'Status']
@@ -119,255 +96,313 @@ export default function AllDataTab() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Search and Filters */}
-      <div className="bg-white rounded-xl shadow-sm p-4">
-        <div className="flex flex-col lg:flex-row gap-4">
-          {/* Search */}
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
-            <input
-              type="text"
-              placeholder="Search by name or ID number..."
-              value={filters.search}
-              onChange={(e) => setFilters(f => ({ ...f, search: e.target.value }))}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-4d-blue focus:border-transparent outline-none"
-            />
+    <div className="space-y-6">
+      {/* Stats Cards - Rekisa Style */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Total Households */}
+        <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">TOTAL HOUSEHOLDS</p>
+              <p className="text-3xl font-bold mt-1" style={{ color: '#333' }}>{totalHouseholds}</p>
+              <p className="text-sm mt-1" style={{ color: '#0088c4' }}>{villages.length} villages</p>
+            </div>
+            <div className="p-2 rounded-lg" style={{ backgroundColor: '#e8f4fc' }}>
+              <Users size={20} style={{ color: '#0088c4' }} />
+            </div>
           </div>
+        </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap gap-2">
-            <select
-              value={filters.village}
-              onChange={(e) => setFilters(f => ({ ...f, village: e.target.value }))}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-4d-blue outline-none"
-            >
-              <option value="">All Villages</option>
-              {villages.map(v => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
+        {/* Approved */}
+        <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">APPROVED</p>
+              <p className="text-3xl font-bold mt-1" style={{ color: '#333' }}>{approvedCount}</p>
+              <p className="text-sm mt-1" style={{ color: '#8cc63f' }}>verified</p>
+            </div>
+            <div className="p-2 rounded-lg" style={{ backgroundColor: '#e8f5e9' }}>
+              <CheckCircle size={20} style={{ color: '#8cc63f' }} />
+            </div>
+          </div>
+        </div>
 
-            <select
-              value={filters.route_code}
-              onChange={(e) => setFilters(f => ({ ...f, route_code: e.target.value }))}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-4d-blue outline-none"
-            >
-              <option value="">All Routes</option>
-              {routes.map(r => (
-                <option key={r.route_code} value={r.route_code}>
-                  {r.route_code} - {r.route_name}
-                </option>
-              ))}
-            </select>
+        {/* Pending */}
+        <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">PENDING</p>
+              <p className="text-3xl font-bold mt-1" style={{ color: '#333' }}>{pendingCount}</p>
+              <p className="text-sm mt-1" style={{ color: '#f59e0b' }}>awaiting</p>
+            </div>
+            <div className="p-2 rounded-lg" style={{ backgroundColor: '#fef3c7' }}>
+              <Clock size={20} style={{ color: '#f59e0b' }} />
+            </div>
+          </div>
+        </div>
 
-            <select
-              value={filters.approval_status}
-              onChange={(e) => setFilters(f => ({ ...f, approval_status: e.target.value }))}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-4d-blue outline-none"
-            >
-              <option value="">All Status</option>
-              <option value="pending">Pending</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-            </select>
-
-            <button
-              onClick={exportCSV}
-              className="flex items-center gap-2 px-4 py-2 bg-4d-green text-white rounded-lg hover:bg-green-600 transition"
-            >
-              <Download size={18} />
-              Export
-            </button>
+        {/* Total Assets */}
+        <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">TOTAL ASSETS</p>
+              <p className="text-3xl font-bold mt-1" style={{ color: '#333' }}>{totalAssets}</p>
+              <p className="text-sm mt-1" style={{ color: '#0088c4' }}>registered</p>
+            </div>
+            <div className="p-2 rounded-lg" style={{ backgroundColor: '#e8f4fc' }}>
+              <Home size={20} style={{ color: '#0088c4' }} />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Results count */}
-      <div className="flex items-center justify-between text-sm text-gray-600">
-        <span>Showing {households.length} households</span>
-        {loading && <span className="flex items-center gap-2"><div className="spinner"></div> Loading...</span>}
-      </div>
+      {/* Households List Section */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        {/* Header */}
+        <div className="p-4 border-b border-gray-100">
+          <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg" style={{ backgroundColor: '#e8f4fc' }}>
+                <FileText size={18} style={{ color: '#0088c4' }} />
+              </div>
+              <h2 className="font-semibold text-gray-800">Registered Households</h2>
+            </div>
+            
+            <div className="flex-1 flex flex-col sm:flex-row gap-3">
+              {/* Search */}
+              <div className="relative flex-1 max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
+                  placeholder="Search by name or ID..."
+                  value={filters.search}
+                  onChange={(e) => setFilters(f => ({ ...f, search: e.target.value }))}
+                  className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none transition-all"
+                  style={{ fontSize: '14px' }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = '#0088c4'
+                    e.target.style.backgroundColor = '#fff'
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = '#e5e7eb'
+                    e.target.style.backgroundColor = '#f9fafb'
+                  }}
+                />
+              </div>
 
-      {/* Error */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
-          <AlertCircle size={20} />
-          {error}
-        </div>
-      )}
+              {/* Filters */}
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={filters.village}
+                  onChange={(e) => setFilters(f => ({ ...f, village: e.target.value }))}
+                  className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none"
+                  style={{ fontSize: '14px' }}
+                >
+                  <option value="">All Villages</option>
+                  {villages.map(v => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
 
-      {/* Data Table */}
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-        {households.length === 0 && !loading ? (
-          <div className="p-8 text-center text-gray-500">
-            No households found matching your criteria
+                <select
+                  value={filters.approval_status}
+                  onChange={(e) => setFilters(f => ({ ...f, approval_status: e.target.value }))}
+                  className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none"
+                  style={{ fontSize: '14px' }}
+                >
+                  <option value="">All Status</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+
+                <button
+                  onClick={exportCSV}
+                  className="flex items-center gap-2 px-4 py-2.5 text-white rounded-lg text-sm font-medium transition-colors"
+                  style={{ backgroundColor: '#8cc63f' }}
+                  onMouseOver={(e) => e.target.style.backgroundColor = '#7ab536'}
+                  onMouseOut={(e) => e.target.style.backgroundColor = '#8cc63f'}
+                >
+                  <Download size={16} />
+                  Export
+                </button>
+              </div>
+            </div>
           </div>
-        ) : (
-          <div className="divide-y">
+        </div>
+
+        {/* Loading State */}
+        {loading && (
+          <div className="p-8 text-center">
+            <div className="w-8 h-8 border-3 border-gray-200 rounded-full animate-spin mx-auto" style={{ borderTopColor: '#0088c4' }}></div>
+            <p className="text-gray-500 mt-3 text-sm">Loading households...</p>
+          </div>
+        )}
+
+        {/* Error State */}
+        {error && (
+          <div className="p-4 m-4 bg-red-50 border border-red-100 text-red-600 rounded-lg flex items-center gap-2 text-sm">
+            <AlertCircle size={18} />
+            {error}
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!loading && households.length === 0 && (
+          <div className="p-12 text-center">
+            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <FileText size={24} className="text-gray-400" />
+            </div>
+            <p className="text-gray-500">No households found</p>
+          </div>
+        )}
+
+        {/* Table */}
+        {!loading && households.length > 0 && (
+          <div className="divide-y divide-gray-100">
+            {/* Table Header */}
+            <div className="hidden md:grid grid-cols-12 gap-4 px-4 py-3 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide">
+              <div className="col-span-1"></div>
+              <div className="col-span-3">Name</div>
+              <div className="col-span-2">ID Number</div>
+              <div className="col-span-2">Village</div>
+              <div className="col-span-1">Assets</div>
+              <div className="col-span-1">Status</div>
+              <div className="col-span-2 text-right">Action</div>
+            </div>
+
+            {/* Rows */}
             {households.map(household => (
-              <div key={household.id} className="hover:bg-gray-50">
+              <div key={household.id} className="hover:bg-gray-50 transition-colors">
                 {/* Main Row */}
                 <div 
-                  className="flex items-center gap-4 p-4 cursor-pointer"
+                  className="grid grid-cols-12 gap-4 px-4 py-4 items-center cursor-pointer"
                   onClick={() => toggleRow(household.id)}
                 >
-                  <button className="text-gray-400 hover:text-4d-blue">
-                    {expandedRows.has(household.id) ? (
-                      <ChevronDown size={20} />
-                    ) : (
-                      <ChevronRight size={20} />
-                    )}
-                  </button>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-4d-gray truncate">
-                        {household.household_head_first_name} {household.household_head_surname}
-                      </h3>
-                      {getStatusBadge(household.approval_status)}
-                    </div>
-                    <p className="text-sm text-gray-500 truncate">
-                      ID: {household.id_number} • {household.hh_original_village_name}
+                  <div className="col-span-1">
+                    <button className="p-1 hover:bg-gray-100 rounded transition-colors">
+                      {expandedRows.has(household.id) ? (
+                        <ChevronDown size={18} className="text-gray-400" />
+                      ) : (
+                        <ChevronRight size={18} className="text-gray-400" />
+                      )}
+                    </button>
+                  </div>
+                  
+                  <div className="col-span-3">
+                    <p className="font-medium text-gray-800">
+                      {household.household_head_first_name} {household.household_head_surname}
+                    </p>
+                    <p className="text-xs text-gray-500 md:hidden">
+                      {household.hh_original_village_name}
                     </p>
                   </div>
-
-                  <div className="hidden md:flex items-center gap-6 text-sm text-gray-500">
-                    <div className="flex items-center gap-1">
-                      <Home size={16} />
-                      <span>{household.household_assets?.length || 0} assets</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Users size={16} />
-                      <span>{household.beneficiaries?.length || 0} beneficiaries</span>
-                    </div>
-                    <div className="w-20">
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span>{getCompleteness(household)}%</span>
-                      </div>
-                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full ${getCompleteness(household) === 100 ? 'bg-4d-green' : 'bg-4d-blue'}`}
-                          style={{ width: `${getCompleteness(household)}%` }}
-                        />
-                      </div>
-                    </div>
+                  
+                  <div className="col-span-2 text-sm text-gray-600 hidden md:block">
+                    {household.id_number}
                   </div>
-
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      navigate(`/personal/${household.id}`)
-                    }}
-                    className="px-3 py-1 text-4d-blue hover:bg-4d-blue hover:text-white rounded-lg transition text-sm font-medium"
-                  >
-                    Generate Form
-                  </button>
+                  
+                  <div className="col-span-2 text-sm text-gray-600 hidden md:block">
+                    {household.hh_original_village_name}
+                  </div>
+                  
+                  <div className="col-span-1 hidden md:block">
+                    <span 
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium"
+                      style={{ backgroundColor: '#e8f4fc', color: '#0088c4' }}
+                    >
+                      {household.household_assets?.length || 0}
+                    </span>
+                  </div>
+                  
+                  <div className="col-span-1 hidden md:block">
+                    {household.approval_status === 'approved' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: '#e8f5e9', color: '#16a34a' }}>
+                        <CheckCircle size={12} /> Approved
+                      </span>
+                    ) : household.approval_status === 'rejected' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
+                        <XCircle size={12} /> Rejected
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: '#fef3c7', color: '#d97706' }}>
+                        <Clock size={12} /> Pending
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="col-span-2 text-right">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        navigate(`/personal/${household.id}`)
+                      }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium transition-colors border"
+                      style={{ 
+                        borderColor: '#0088c4', 
+                        color: '#0088c4',
+                      }}
+                      onMouseOver={(e) => {
+                        e.target.style.backgroundColor = '#0088c4'
+                        e.target.style.color = '#fff'
+                      }}
+                      onMouseOut={(e) => {
+                        e.target.style.backgroundColor = 'transparent'
+                        e.target.style.color = '#0088c4'
+                      }}
+                    >
+                      Generate Form
+                    </button>
+                  </div>
                 </div>
 
                 {/* Expanded Content */}
                 {expandedRows.has(household.id) && (
-                  <div className="px-4 pb-4 ml-10 bg-gray-50 rounded-b-lg">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-                      {/* Basic Info */}
-                      <div className="space-y-2">
-                        <h4 className="font-semibold text-4d-gray flex items-center gap-2">
-                          <Users size={16} /> Household Details
+                  <div className="px-4 pb-4 bg-gray-50 border-t border-gray-100">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4">
+                      {/* Contact Info */}
+                      <div className="bg-white rounded-lg p-4 border border-gray-100">
+                        <h4 className="font-medium text-gray-700 mb-3 flex items-center gap-2">
+                          <Phone size={16} style={{ color: '#0088c4' }} /> Contact
                         </h4>
-                        <div className="text-sm space-y-1">
+                        <div className="space-y-2 text-sm">
+                          <p><span className="text-gray-500">Phone:</span> {household.cellphone_no || 'N/A'}</p>
                           <p><span className="text-gray-500">Gender:</span> {household.gender}</p>
                           <p><span className="text-gray-500">ID Type:</span> {household.type_of_identification}</p>
-                          <p><span className="text-gray-500">Residential Village:</span> {household.hh_residential_village}</p>
-                          <p><span className="text-gray-500">Occupation:</span> {household.occupation_of_pap || <span className="text-yellow-600">Missing</span>}</p>
-                          <p><span className="text-gray-500">Phone:</span> {household.cellphone_no || <span className="text-yellow-600">Missing</span>}</p>
-                          <p><span className="text-gray-500">Community Council:</span> {household.community_council || <span className="text-yellow-600">Missing</span>}</p>
                         </div>
                       </div>
 
                       {/* Beneficiaries */}
-                      <div className="space-y-2">
-                        <h4 className="font-semibold text-4d-gray flex items-center gap-2">
-                          <Users size={16} /> Beneficiaries ({household.beneficiaries?.length || 0})
+                      <div className="bg-white rounded-lg p-4 border border-gray-100">
+                        <h4 className="font-medium text-gray-700 mb-3 flex items-center gap-2">
+                          <Users size={16} style={{ color: '#8cc63f' }} /> Beneficiaries ({household.beneficiaries?.length || 0})
                         </h4>
                         {household.beneficiaries?.length > 0 ? (
-                          <ul className="text-sm space-y-2">
-                            {household.beneficiaries.map(b => (
-                              <li key={b.id} className="bg-white p-2 rounded border">
-                                <p className="font-medium">{b.first_name} {b.surname}</p>
-                                <p className="text-gray-500 text-xs">ID: {b.id_number}</p>
-                              </li>
+                          <div className="space-y-2">
+                            {household.beneficiaries.slice(0, 3).map(b => (
+                              <p key={b.id} className="text-sm text-gray-600">{b.first_name} {b.surname}</p>
                             ))}
-                          </ul>
+                          </div>
                         ) : (
-                          <p className="text-sm text-gray-500">No beneficiaries registered</p>
-                        )}
-                      </div>
-
-                      {/* Co-owners */}
-                      <div className="space-y-2">
-                        <h4 className="font-semibold text-4d-gray flex items-center gap-2">
-                          <Users size={16} /> Co-owners ({household.co_owners?.length || 0})
-                        </h4>
-                        {household.co_owners?.length > 0 ? (
-                          <ul className="text-sm space-y-2">
-                            {household.co_owners.map(c => (
-                              <li key={c.id} className="bg-white p-2 rounded border">
-                                <p className="font-medium">{c.first_name} {c.surname}</p>
-                                <p className="text-gray-500 text-xs">ID: {c.id_number}</p>
-                                <p className="text-gray-500 text-xs">Phone: {c.cellphone_no || 'N/A'}</p>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-sm text-gray-500">No co-owners registered</p>
+                          <p className="text-sm text-gray-400">None registered</p>
                         )}
                       </div>
 
                       {/* Assets */}
-                      <div className="space-y-2 md:col-span-2 lg:col-span-3">
-                        <h4 className="font-semibold text-4d-gray flex items-center gap-2">
-                          <Home size={16} /> Assets ({household.household_assets?.length || 0})
+                      <div className="bg-white rounded-lg p-4 border border-gray-100">
+                        <h4 className="font-medium text-gray-700 mb-3 flex items-center gap-2">
+                          <Home size={16} style={{ color: '#0088c4' }} /> Assets ({household.household_assets?.length || 0})
                         </h4>
                         {household.household_assets?.length > 0 ? (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                            {household.household_assets.map(a => (
-                              <div key={a.id} className="bg-white p-3 rounded border">
-                                <p className="font-medium">{a.asset_type}</p>
-                                <p className="text-gray-500 text-xs flex items-center gap-1">
-                                  <MapPin size={12} /> {a.village}
-                                </p>
-                                <p className="text-gray-500 text-xs">
-                                  GPS: {a.gps_coordinates || <span className="text-yellow-600">Missing</span>}
-                                </p>
-                                <p className="text-gray-500 text-xs">
-                                  Size: {a.asset_size ? `${a.asset_size} ${a.size_unit || 'sqm'}` : <span className="text-yellow-600">Missing</span>}
-                                </p>
-                                <p className="text-gray-500 text-xs">
-                                  Type: {a.acquisition_type || <span className="text-yellow-600">Missing</span>}
-                                </p>
-                              </div>
+                          <div className="space-y-2">
+                            {household.household_assets.slice(0, 3).map(a => (
+                              <p key={a.id} className="text-sm text-gray-600">{a.asset_type}</p>
                             ))}
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-500">No assets registered</p>
+                          <p className="text-sm text-gray-400">None registered</p>
                         )}
                       </div>
-
-                      {/* Banking */}
-                      {household.banking_details?.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="font-semibold text-4d-gray flex items-center gap-2">
-                            <CreditCard size={16} /> Banking Details
-                          </h4>
-                          {household.banking_details.map(b => (
-                            <div key={b.id} className="bg-white p-2 rounded border text-sm">
-                              <p className="font-medium">{b.bank_name}</p>
-                              <p className="text-gray-500 text-xs">Account: {b.account_number}</p>
-                              <p className="text-gray-500 text-xs">Holder: {b.account_holder_name}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -375,6 +410,11 @@ export default function AllDataTab() {
             ))}
           </div>
         )}
+
+        {/* Footer */}
+        <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 text-sm text-gray-500">
+          Showing {households.length} households
+        </div>
       </div>
     </div>
   )

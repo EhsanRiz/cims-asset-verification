@@ -5,58 +5,85 @@
 @tailwind utilities;
 
 :root {
-  --4d-blue: #0088c4;
-  --4d-green: #8cc63f;
-  --4d-brown: #8b6914;
-  --4d-gray: #333333;
-  --4d-light: #f0f7fa;
+  --primary: #0088c4;
+  --primary-dark: #006a9c;
+  --secondary: #8cc63f;
+  --secondary-dark: #7ab536;
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-500: #6b7280;
+  --gray-800: #1f2937;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background-color: var(--4d-light);
-  color: var(--4d-gray);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #f8fafb;
+  color: #333;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
   background: #f1f1f1;
-  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--4d-blue);
-  border-radius: 4px;
+  background: #ccc;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #006a9c;
+  background: #0088c4;
 }
 
-/* Buttons with 4D colors */
-.btn-primary {
-  background-color: var(--4d-blue);
-  color: white;
-  transition: background-color 0.2s;
+/* Animations */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
-.btn-primary:hover {
-  background-color: #006a9c;
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
 
-.btn-success {
-  background-color: var(--4d-green);
-  color: white;
-  transition: background-color 0.2s;
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.btn-success:hover {
-  background-color: #7ab536;
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Form inputs */
+input, select, textarea {
+  font-family: inherit;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+}
+
+/* Buttons */
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Print styles */
@@ -65,12 +92,8 @@ body {
     display: none !important;
   }
   
-  .print-only {
-    display: block !important;
-  }
-  
   body {
-    background: white;
+    background: white !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
@@ -84,109 +107,51 @@ body {
   }
 }
 
-/* Form styles for printing */
+/* Form verification styles */
 .verification-form {
   font-size: 11pt;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .verification-form .form-field {
   border-bottom: 1px solid #333;
   min-height: 24px;
   padding: 4px 8px;
+  background: #f9fafb;
 }
 
-.verification-form .form-label {
-  font-weight: 500;
-  color: var(--4d-gray);
-}
-
-/* Section headers with 4D blue */
-.section-header {
-  color: var(--4d-blue);
-  border-bottom: 2px solid var(--4d-blue);
+.verification-form .section-header {
+  color: #0088c4;
+  border-bottom: 2px solid #0088c4;
   padding-bottom: 4px;
   margin-bottom: 12px;
   font-weight: 700;
 }
 
-/* Loading spinner with 4D blue */
+/* Missing field highlight */
+.field-missing {
+  background-color: #fef9e7 !important;
+  border: 1px dashed #f59e0b !important;
+}
+
+/* Loading spinner */
 .spinner {
-  border: 3px solid #e0e0e0;
-  border-top: 3px solid var(--4d-blue);
+  width: 20px;
+  height: 20px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #0088c4;
   border-radius: 50%;
-  width: 24px;
-  height: 24px;
   animation: spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+/* Smooth transitions */
+* {
+  transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
 }
 
-/* Missing field highlight */
-.field-missing {
-  background-color: #fff8e6;
-  border: 1px dashed #f0ad4e;
-}
-
-.field-complete {
-  background-color: #e8f5e9;
-}
-
-/* Card styles */
-.card {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  border: 1px solid #e5e7eb;
-}
-
-/* Table styles with 4D colors */
-.data-table th {
-  background-color: var(--4d-blue);
-  color: white;
-  font-weight: 600;
-}
-
-.data-table tr:nth-child(even) {
-  background-color: #f8fafb;
-}
-
-/* Status badges */
-.badge-success {
-  background-color: #e8f5e9;
-  color: #2e7d32;
-}
-
-.badge-warning {
-  background-color: #fff8e6;
-  color: #f57c00;
-}
-
-.badge-error {
-  background-color: #ffebee;
-  color: #c62828;
-}
-
-/* Focus states with 4D blue */
-input:focus, select:focus, textarea:focus {
-  outline: none;
-  border-color: var(--4d-blue);
-  box-shadow: 0 0 0 3px rgba(0, 136, 196, 0.15);
-}
-
-/* Links */
-a {
-  color: var(--4d-blue);
-}
-
-a:hover {
-  color: #006a9c;
-}
-
-/* Selection color */
+/* Selection */
 ::selection {
-  background-color: rgba(0, 136, 196, 0.2);
+  background-color: rgba(0, 136, 196, 0.15);
 }
