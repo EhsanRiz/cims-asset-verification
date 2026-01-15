@@ -1,0 +1,115 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f5f7fa;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #0088c4;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #006a9c;
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  
+  .print-only {
+    display: block !important;
+  }
+  
+  body {
+    background: white;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  
+  .print-page {
+    page-break-after: always;
+  }
+  
+  .print-page:last-child {
+    page-break-after: auto;
+  }
+}
+
+/* Form styles for printing */
+.verification-form {
+  font-size: 11pt;
+  line-height: 1.4;
+}
+
+.verification-form .form-field {
+  border-bottom: 1px solid #333;
+  min-height: 20px;
+  padding: 2px 4px;
+}
+
+.verification-form .form-label {
+  font-weight: 500;
+  color: #333;
+}
+
+/* Loading spinner */
+.spinner {
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #0088c4;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Expandable row animation */
+.expandable-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+.expandable-content.expanded {
+  max-height: 2000px;
+}
+
+/* Tab styles */
+.tab-active {
+  border-bottom: 3px solid #0088c4;
+  color: #0088c4;
+  font-weight: 600;
+}
+
+/* Missing field highlight */
+.field-missing {
+  background-color: #fff3cd;
+  border: 1px dashed #ffc107;
+}
+
+.field-complete {
+  background-color: #d4edda;
+}
