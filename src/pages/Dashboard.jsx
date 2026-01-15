@@ -24,72 +24,130 @@ export default function Dashboard() {
     navigate('/login')
   }
 
+  const getInitials = (name) => {
+    if (!name) return 'U'
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+  }
+
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#f8fafb' }}>
-      {/* Top Header Bar - Green like Rekisa */}
-      <header 
-        className="sticky top-0 z-50 shadow-sm"
-        style={{ backgroundColor: '#0088c4' }}
-      >
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex items-center justify-between h-14">
-            {/* Logo & Title */}
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-white bg-opacity-20 rounded-lg flex items-center justify-center">
-                <img src="/logo-llwdp.png" alt="CIMS" className="w-6 h-6 object-contain" />
+    <div style={{ minHeight: '100vh', backgroundColor: '#f5f7fa', display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
+      <header style={{ 
+        backgroundColor: '#0088c4', 
+        position: 'sticky', 
+        top: 0, 
+        zIndex: 50,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+      }}>
+        <div style={{ 
+          maxWidth: '1200px', 
+          margin: '0 auto', 
+          padding: '0 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          height: '56px',
+        }}>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '36px',
+              height: '36px',
+              backgroundColor: 'rgba(255,255,255,0.2)',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <img src="/logo-llwdp.png" alt="CIMS" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            </div>
+            <span style={{ color: 'white', fontWeight: '600', fontSize: '18px' }}>CIMS</span>
+          </div>
+
+          {/* Right side */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button 
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '8px',
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                color: 'rgba(255,255,255,0.8)',
+              }}
+            >
+              <RefreshCw size={20} />
+            </button>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                backgroundColor: '#8cc63f',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '14px',
+                fontWeight: '600',
+              }}>
+                {getInitials(user?.full_name)}
               </div>
-              <span className="text-white font-semibold text-lg">CIMS</span>
+              <span style={{ color: 'white', fontSize: '14px' }}>{user?.full_name}</span>
             </div>
 
-            {/* Right side */}
-            <div className="flex items-center gap-3">
-              <button 
-                className="p-2 text-white text-opacity-80 hover:text-opacity-100 hover:bg-white hover:bg-opacity-10 rounded-lg transition"
-                onClick={() => window.location.reload()}
-              >
-                <RefreshCw size={20} />
-              </button>
-              
-              {/* User Avatar */}
-              <div className="flex items-center gap-2">
-                <div 
-                  className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold"
-                  style={{ backgroundColor: '#8cc63f', color: 'white' }}
-                >
-                  {user?.full_name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U'}
-                </div>
-                <span className="text-white text-sm hidden sm:block">{user?.full_name}</span>
-              </div>
-
-              <button
-                onClick={handleLogout}
-                className="p-2 text-white text-opacity-80 hover:text-opacity-100 hover:bg-white hover:bg-opacity-10 rounded-lg transition"
-                title="Sign Out"
-              >
-                <LogOut size={20} />
-              </button>
-            </div>
+            <button
+              onClick={handleLogout}
+              style={{
+                padding: '8px',
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                color: 'rgba(255,255,255,0.8)',
+              }}
+              title="Sign Out"
+            >
+              <LogOut size={20} />
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <nav className="bg-white border-b border-gray-200 sticky top-14 z-40">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex items-center gap-1 overflow-x-auto">
+      {/* Navigation */}
+      <nav style={{ 
+        backgroundColor: 'white', 
+        borderBottom: '1px solid #e5e7eb',
+        position: 'sticky',
+        top: '56px',
+        zIndex: 40,
+      }}>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 16px' }}>
+          <div style={{ display: 'flex', gap: '4px' }}>
             {tabs.map(tab => {
               const isActive = currentTab.id === tab.id
+              const Icon = tab.icon
               return (
                 <button
                   key={tab.id}
                   onClick={() => navigate(tab.path)}
-                  className="flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap border-b-2"
-                  style={{ 
-                    borderColor: isActive ? '#0088c4' : 'transparent',
-                    color: isActive ? '#0088c4' : '#6b7280'
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '12px 16px',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderBottom: `2px solid ${isActive ? '#0088c4' : 'transparent'}`,
+                    color: isActive ? '#0088c4' : '#6b7280',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    cursor: 'pointer',
                   }}
                 >
-                  <tab.icon size={18} />
+                  <Icon size={18} />
                   <span>{tab.label}</span>
                 </button>
               )
@@ -99,7 +157,7 @@ export default function Dashboard() {
       </nav>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      <main style={{ flex: 1, maxWidth: '1200px', margin: '0 auto', padding: '24px 16px', width: '100%', boxSizing: 'border-box' }}>
         <Routes>
           <Route path="/" element={<AllDataTab />} />
           <Route path="/personal" element={<PersonalAssetTab />} />
@@ -109,14 +167,23 @@ export default function Dashboard() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-white border-t border-gray-100 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 py-3">
-          <div className="flex items-center justify-center gap-2">
-            <img src="/logo-4d.png" alt="4D" className="h-5 opacity-60" />
-            <span className="text-xs text-gray-400">
-              Developed by <span style={{ color: '#0088c4' }}>4D Climate Solutions</span> for LLWDP III
-            </span>
-          </div>
+      <footer style={{ 
+        backgroundColor: 'white', 
+        borderTop: '1px solid #e5e7eb',
+        padding: '12px 16px',
+      }}>
+        <div style={{ 
+          maxWidth: '1200px', 
+          margin: '0 auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+        }}>
+          <img src="/logo-4d.png" alt="4D" style={{ height: '20px', opacity: 0.6 }} />
+          <span style={{ fontSize: '12px', color: '#9ca3af' }}>
+            Developed by <span style={{ color: '#0088c4' }}>4D Climate Solutions</span> for LLWDP III
+          </span>
         </div>
       </footer>
     </div>
