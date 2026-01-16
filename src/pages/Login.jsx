@@ -43,31 +43,57 @@ export default function Login() {
         borderRadius: '16px',
         boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
         width: '100%',
-        maxWidth: '400px',
+        maxWidth: '420px',
         overflow: 'hidden',
       }}>
-        {/* Logo Section */}
-        <div style={{ padding: '32px 32px 16px 32px', textAlign: 'center' }}>
-          <div style={{
-            width: '80px',
-            height: '80px',
-            margin: '0 auto',
-            backgroundColor: '#f8f9fa',
-            borderRadius: '16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: '1px solid #e9ecef',
+        {/* Partner Logos */}
+        <div style={{ 
+          padding: '24px 32px 16px 32px', 
+          backgroundColor: '#f8f9fa',
+          borderBottom: '1px solid #e9ecef',
+        }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            gap: '16px',
+            flexWrap: 'wrap',
           }}>
-            <img src="/logo-llwdp.png" alt="LLWDP" style={{ width: '60px', height: '60px', objectFit: 'contain' }} />
+            <img src="/logo-lesotho.png" alt="Government of Lesotho" style={{ height: '50px', objectFit: 'contain' }} />
+            <img src="/logo-llwdp.png" alt="LLWDSP III" style={{ height: '50px', objectFit: 'contain' }} />
+            <img src="/logo-afdb.png" alt="African Development Bank" style={{ height: '45px', objectFit: 'contain' }} />
           </div>
-          <p style={{ color: '#6b7280', fontSize: '14px', marginTop: '12px' }}>
+        </div>
+
+        {/* Title Section */}
+        <div style={{ padding: '24px 32px 16px 32px', textAlign: 'center' }}>
+          <h1 style={{ 
+            fontSize: '28px', 
+            fontWeight: '700', 
+            color: '#0088c4', 
+            margin: '0 0 4px 0' 
+          }}>
+            CIMS
+          </h1>
+          <p style={{ 
+            fontSize: '14px', 
+            color: '#6b7280', 
+            margin: '0 0 4px 0' 
+          }}>
+            Compensation Information Management System
+          </p>
+          <p style={{ 
+            fontSize: '13px', 
+            color: '#8cc63f', 
+            margin: 0,
+            fontWeight: '500',
+          }}>
             Asset Registration & Verification
           </p>
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} style={{ padding: '0 32px 32px 32px' }}>
+        <form onSubmit={handleSubmit} style={{ padding: '8px 32px 32px 32px' }}>
           {error && (
             <div style={{
               backgroundColor: '#fef2f2',
@@ -105,14 +131,17 @@ export default function Login() {
                 fontSize: '15px',
                 outline: 'none',
                 boxSizing: 'border-box',
+                transition: 'all 0.2s',
               }}
               onFocus={(e) => {
                 e.target.style.borderColor = '#0088c4'
                 e.target.style.backgroundColor = '#fff'
+                e.target.style.boxShadow = '0 0 0 3px rgba(0, 136, 196, 0.1)'
               }}
               onBlur={(e) => {
                 e.target.style.borderColor = '#e5e7eb'
                 e.target.style.backgroundColor = '#f9fafb'
+                e.target.style.boxShadow = 'none'
               }}
             />
           </div>
@@ -136,14 +165,17 @@ export default function Login() {
                 fontSize: '15px',
                 outline: 'none',
                 boxSizing: 'border-box',
+                transition: 'all 0.2s',
               }}
               onFocus={(e) => {
                 e.target.style.borderColor = '#0088c4'
                 e.target.style.backgroundColor = '#fff'
+                e.target.style.boxShadow = '0 0 0 3px rgba(0, 136, 196, 0.1)'
               }}
               onBlur={(e) => {
                 e.target.style.borderColor = '#e5e7eb'
                 e.target.style.backgroundColor = '#f9fafb'
+                e.target.style.boxShadow = 'none'
               }}
             />
           </div>
@@ -166,7 +198,10 @@ export default function Login() {
               alignItems: 'center',
               justifyContent: 'center',
               gap: '8px',
+              transition: 'all 0.2s',
             }}
+            onMouseOver={(e) => { if (!loading) e.target.style.backgroundColor = '#006a9c' }}
+            onMouseOut={(e) => { e.target.style.backgroundColor = '#0088c4' }}
           >
             {loading ? (
               <div style={{
@@ -198,7 +233,7 @@ export default function Login() {
             Developed by <span style={{ color: '#0088c4', fontWeight: '600' }}>4D Climate Solutions</span>
           </p>
           <p style={{ fontSize: '11px', color: '#d1d5db', marginTop: '4px' }}>
-            © 2026 · LLWDP III
+            © 2026 · LLWDSP III
           </p>
         </div>
       </div>
