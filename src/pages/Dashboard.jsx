@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { 
   Menu, X, LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
-  Save, Upload, MapPin, Camera, Check, XCircle, Map, Building2, TreePine
+  Save, Upload, MapPin, Camera, Check, XCircle, MapIcon, Building2, TreePine
 } from 'lucide-react'
 
 export default function Dashboard() {
@@ -286,7 +286,7 @@ export default function Dashboard() {
               {/* Stats Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                 <StatCard label="Total PAPs" value={stats.total} color="#0088c4" icon={Users} />
-                <StatCard label="Routes" value={stats.routes} color="#8cc63f" icon={Map} />
+                <StatCard label="Routes" value={stats.routes} color="#8cc63f" icon={MapIcon} />
                 <StatCard label="Verified" value={stats.verified} color="#16a34a" icon={Check} />
                 <StatCard label="With GPS" value={stats.withGPS} color="#f59e0b" icon={MapPin} />
               </div>
@@ -294,7 +294,7 @@ export default function Dashboard() {
               {/* Routes */}
               <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '20px', border: '1px solid #e5e7eb' }}>
                 <h2 style={{ fontSize: '17px', fontWeight: '600', color: '#1f2937', margin: '0 0 16px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Map size={20} color="#0088c4" /> Select a Route
+                  <MapIcon size={20} color="#0088c4" /> Select a Route
                 </h2>
 
                 {loading ? (
@@ -304,7 +304,7 @@ export default function Dashboard() {
                   </div>
                 ) : routes.length === 0 ? (
                   <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>
-                    <Map size={40} style={{ opacity: 0.3, marginBottom: '8px' }} />
+                    <MapIcon size={40} style={{ opacity: 0.3, marginBottom: '8px' }} />
                     <p>No routes found. Please check if data is imported correctly.</p>
                     <p style={{ fontSize: '12px', marginTop: '8px' }}>Total households loaded: {households.length}</p>
                     <button onClick={loadData} style={{ marginTop: '12px', padding: '8px 16px', backgroundColor: '#0088c4', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
