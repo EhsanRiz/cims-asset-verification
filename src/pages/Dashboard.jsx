@@ -60,10 +60,12 @@ export default function Dashboard() {
   const loadData = async () => {
     try {
       setLoading(true)
+      // Fetch all records (Supabase default limit is 1000)
       const { data: householdData, error } = await supabase
         .from('households')
         .select('*')
         .order('household_head_surname', { ascending: true })
+        .range(0, 1999) // Fetch up to 2000 records
       
       if (error) throw error
       
