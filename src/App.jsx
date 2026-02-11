@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 
@@ -39,13 +39,13 @@ function AuthProvider({ children }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#f5f7fa',
+        backgroundColor: '#f8fafc',
       }}>
         <div style={{
           width: '40px',
           height: '40px',
           border: '3px solid #e5e7eb',
-          borderTopColor: '#0088c4',
+          borderTopColor: '#8cc63f',
           borderRadius: '50%',
           animation: 'spin 1s linear infinite',
         }} />
@@ -78,7 +78,7 @@ function ProtectedRoute({ children }) {
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -92,7 +92,7 @@ function App() {
           />
         </Routes>
       </AuthProvider>
-    </BrowserRouter>
+    </HashRouter>
   )
 }
 
