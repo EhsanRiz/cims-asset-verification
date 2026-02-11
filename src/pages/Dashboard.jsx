@@ -4,29 +4,30 @@ import { supabase } from '../lib/supabase'
 import { 
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
-  Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine
+  Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
+  Download, X, TrendingUp
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
 const colors = {
-  primary: '#1a3a4a',      // Dark navy/teal
-  primaryDark: '#0f2a36',  // Darker navy
-  accent: '#8cc63f',       // 4D Lime green
-  accentHover: '#7ab62f',  // Darker green
-  success: '#22c55e',      // Success green
-  warning: '#f59e0b',      // Warning orange
-  error: '#ef4444',        // Error red
-  textDark: '#1f2937',     // Dark text
-  textMuted: '#6b7280',    // Muted text
-  textLight: '#9ca3af',    // Light text
-  bgLight: '#f8fafc',      // Light background
-  bgCard: '#ffffff',       // Card background
-  border: '#e2e8f0',       // Border color
-  rural: '#059669',        // Rural green
-  urban: '#7c3aed',        // Urban purple
+  primary: '#1a3a4a',
+  primaryDark: '#0f2a36',
+  accent: '#8cc63f',
+  accentHover: '#7ab62f',
+  success: '#22c55e',
+  warning: '#f59e0b',
+  error: '#ef4444',
+  textDark: '#1f2937',
+  textMuted: '#6b7280',
+  textLight: '#9ca3af',
+  bgLight: '#f8fafc',
+  bgCard: '#ffffff',
+  border: '#e2e8f0',
+  rural: '#059669',
+  urban: '#7c3aed',
 }
 
-// Map icon component (to avoid conflict with JS Map)
+// Map icon component
 const MapIcon = ({ size = 24, color = 'currentColor' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon>
@@ -46,6 +47,11 @@ export default function Dashboard() {
   const [selectedHousehold, setSelectedHousehold] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   
+  // Global search state
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('')
+  const [globalSearchResults, setGlobalSearchResults] = useState([])
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false)
+  
   const [activeTab, setActiveTab] = useState('details')
   const [editMode, setEditMode] = useState(false)
   const [editedData, setEditedData] = useState({})
@@ -57,19 +63,47 @@ export default function Dashboard() {
     loadData()
   }, [])
 
+  // Global search effect
+  useEffect(() => {
+    if (globalSearchQuery.length >= 2) {
+      const search = globalSearchQuery.toLowerCase()
+      const results = households.filter(h => 
+        h.household_head_first_name?.toLowerCase().includes(search) ||
+        h.household_head_surname?.toLowerCase().includes(search) ||
+        h.id_number?.toLowerCase().includes(search) ||
+        h.file_number?.toLowerCase().includes(search) ||
+        h.route_name?.toLowerCase().includes(search)
+      ).slice(0, 20) // Limit to 20 results
+      setGlobalSearchResults(results)
+    } else {
+      setGlobalSearchResults([])
+    }
+  }, [globalSearchQuery, households])
+
   const loadData = async () => {
     try {
       setLoading(true)
-      // Fetch all records (Supabase default limit is 1000)
-      const { data: householdData, error } = await supabase
+      
+      const { data: batch1, error: error1 } = await supabase
         .from('households')
         .select('*')
         .order('household_head_surname', { ascending: true })
-        .range(0, 2999) // Fetch up to 3000 records
+        .range(0, 999)
       
-      if (error) throw error
+      if (error1) throw error1
       
-      setHouseholds(householdData || [])
+      const { data: batch2, error: error2 } = await supabase
+        .from('households')
+        .select('*')
+        .order('household_head_surname', { ascending: true })
+        .range(1000, 1999)
+      
+      if (error2) throw error2
+      
+      const householdData = [...(batch1 || []), ...(batch2 || [])]
+      console.log('Total households loaded:', householdData.length)
+      
+      setHouseholds(householdData)
       
       const routeMap = new Map()
       householdData?.forEach(h => {
@@ -118,6 +152,16 @@ export default function Dashboard() {
     withGPS: households.filter(h => h.latitude && h.longitude).length
   }
 
+  // Progress calculation
+  const progress = {
+    verified: stats.verified,
+    total: stats.total,
+    percentage: stats.total > 0 ? Math.round((stats.verified / stats.total) * 100) : 0,
+    withPhotos: households.filter(h => h.photograph_of_pap_url).length,
+    withID: households.filter(h => h.id_number).length,
+    withFileNo: households.filter(h => h.file_number).length,
+  }
+
   const ruralRoutes = routes.filter(r => r.type === 'Rural')
   const urbanRoutes = routes.filter(r => r.type === 'Urban')
 
@@ -148,6 +192,9 @@ export default function Dashboard() {
     setEditMode(false)
     setActiveTab('details')
     setView('detail')
+    // Close global search if open
+    setShowGlobalSearch(false)
+    setGlobalSearchQuery('')
   }
 
   const handleBack = () => {
@@ -229,6 +276,57 @@ export default function Dashboard() {
     }
   }
 
+  // Export to Excel function
+  const handleExportExcel = () => {
+    // Prepare data for export
+    const exportData = households.map(h => ({
+      'First Name': h.household_head_first_name || '',
+      'Surname': h.household_head_surname || '',
+      'Route': h.route_name || '',
+      'Route Type': h.route_type || '',
+      'Land Use': h.land_use || '',
+      'File Number': h.file_number || '',
+      'ID Number': h.id_number || '',
+      'Phone': h.cellphone_no || '',
+      'Permanent Area (sqm)': h.affected_area_perm || '',
+      'Temporary Area (sqm)': h.affected_area_temp || '',
+      'Disturbance Allowance (M)': h.disturbance_allowance || '',
+      'Total Compensation (M)': h.total_compensation || '',
+      'Latitude': h.latitude || '',
+      'Longitude': h.longitude || '',
+      'Verification Status': h.verification_status || 'pending',
+      'Has Photo': h.photograph_of_pap_url ? 'Yes' : 'No',
+      'Has ID Doc': h.id_document_url ? 'Yes' : 'No',
+    }))
+
+    // Convert to CSV
+    const headers = Object.keys(exportData[0])
+    const csvContent = [
+      headers.join(','),
+      ...exportData.map(row => 
+        headers.map(header => {
+          let cell = row[header]
+          // Escape commas and quotes
+          if (typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))) {
+            cell = `"${cell.replace(/"/g, '""')}"`
+          }
+          return cell
+        }).join(',')
+      )
+    ].join('\n')
+
+    // Download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `CIMS_PAP_Export_${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   const handlePrint = () => {
     const data = editedData.id ? editedData : selectedHousehold
     const printWindow = window.open('', '_blank')
@@ -239,7 +337,7 @@ export default function Dashboard() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.bgLight }}>
-      {/* Header - 4D Dark Navy */}
+      {/* Header */}
       <header style={{ 
         background: `linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%)`,
         padding: '0 20px', 
@@ -280,6 +378,74 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+          
+          {/* Global Search in Header */}
+          <div style={{ flex: 1, maxWidth: '400px', margin: '0 20px', position: 'relative' }}>
+            <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.5)' }} />
+            <input
+              type="text"
+              placeholder="Search all PAPs..."
+              value={globalSearchQuery}
+              onChange={(e) => { setGlobalSearchQuery(e.target.value); setShowGlobalSearch(true) }}
+              onFocus={() => setShowGlobalSearch(true)}
+              style={{ 
+                width: '100%', padding: '10px 14px 10px 44px', 
+                backgroundColor: 'rgba(255,255,255,0.1)', 
+                border: '1px solid rgba(255,255,255,0.2)', 
+                borderRadius: '10px', fontSize: '14px', color: 'white', outline: 'none', boxSizing: 'border-box',
+                transition: 'all 0.2s'
+              }}
+            />
+            {globalSearchQuery && (
+              <button onClick={() => { setGlobalSearchQuery(''); setShowGlobalSearch(false) }} 
+                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
+                <X size={16} color="rgba(255,255,255,0.7)" />
+              </button>
+            )}
+            
+            {/* Global Search Results Dropdown */}
+            {showGlobalSearch && globalSearchResults.length > 0 && (
+              <div style={{ 
+                position: 'absolute', top: '100%', left: 0, right: 0, marginTop: '8px',
+                backgroundColor: colors.bgCard, borderRadius: '12px', 
+                boxShadow: '0 10px 40px rgba(0,0,0,0.2)', border: `1px solid ${colors.border}`,
+                maxHeight: '400px', overflowY: 'auto', zIndex: 1000
+              }}>
+                <div style={{ padding: '10px 14px', borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.bgLight }}>
+                  <span style={{ fontSize: '12px', fontWeight: '600', color: colors.textMuted }}>
+                    {globalSearchResults.length} results found
+                  </span>
+                </div>
+                {globalSearchResults.map(pap => (
+                  <div key={pap.id} onClick={() => handleSelectPAP(pap)}
+                    style={{ padding: '12px 14px', cursor: 'pointer', borderBottom: `1px solid ${colors.border}`, transition: 'background-color 0.15s' }}
+                    onMouseOver={e => e.currentTarget.style.backgroundColor = colors.bgLight}
+                    onMouseOut={e => e.currentTarget.style.backgroundColor = colors.bgCard}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{ 
+                        width: '36px', height: '36px', borderRadius: '8px', 
+                        backgroundColor: `${colors.primary}15`, color: colors.primary,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                        fontSize: '12px', fontWeight: '700' 
+                      }}>
+                        {pap.household_head_first_name?.[0]}{pap.household_head_surname?.[0]}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <p style={{ margin: 0, fontWeight: '600', color: colors.textDark, fontSize: '14px' }}>
+                          {pap.household_head_first_name} {pap.household_head_surname}
+                        </p>
+                        <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: colors.textMuted }}>
+                          {pap.route_name} • {pap.land_use || 'N/A'}
+                        </p>
+                      </div>
+                      <ChevronRight size={16} color={colors.textLight} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ 
               width: '38px', height: '38px', borderRadius: '50%', 
@@ -305,6 +471,11 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {/* Click outside to close global search */}
+      {showGlobalSearch && (
+        <div onClick={() => setShowGlobalSearch(false)} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
+      )}
+
       {/* Main Content */}
       <main style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
         <div style={{ maxWidth: '1300px', margin: '0 auto' }}>
@@ -312,6 +483,61 @@ export default function Dashboard() {
           {/* ROUTES VIEW */}
           {view === 'routes' && (
             <>
+              {/* Progress Tracker */}
+              <div style={{ 
+                backgroundColor: colors.bgCard, 
+                borderRadius: '16px', 
+                padding: '20px 24px', 
+                marginBottom: '20px',
+                border: `1px solid ${colors.border}`,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ padding: '8px', backgroundColor: `${colors.accent}15`, borderRadius: '8px' }}>
+                      <TrendingUp size={20} color={colors.accent} />
+                    </div>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: colors.textDark }}>Verification Progress</h3>
+                      <p style={{ margin: '2px 0 0 0', fontSize: '13px', color: colors.textMuted }}>
+                        {progress.verified} of {progress.total} PAPs verified ({progress.percentage}%)
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* Export Button */}
+                  <button onClick={handleExportExcel} style={{ 
+                    display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', 
+                    backgroundColor: colors.primary, color: 'white', 
+                    border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)', transition: 'all 0.2s'
+                  }}
+                  onMouseOver={e => e.currentTarget.style.transform = 'translateY(-1px)'}
+                  onMouseOut={e => e.currentTarget.style.transform = 'none'}>
+                    <Download size={18} /> Export to Excel
+                  </button>
+                </div>
+                
+                {/* Progress Bar */}
+                <div style={{ backgroundColor: colors.bgLight, borderRadius: '10px', height: '12px', overflow: 'hidden' }}>
+                  <div style={{ 
+                    width: `${progress.percentage}%`, 
+                    height: '100%', 
+                    background: `linear-gradient(90deg, ${colors.accent} 0%, ${colors.success} 100%)`,
+                    borderRadius: '10px',
+                    transition: 'width 0.5s ease'
+                  }} />
+                </div>
+                
+                {/* Progress Stats */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginTop: '16px' }}>
+                  <ProgressStat label="Verified" value={progress.verified} total={progress.total} color={colors.success} />
+                  <ProgressStat label="With Photos" value={progress.withPhotos} total={progress.total} color={colors.primary} />
+                  <ProgressStat label="With ID Number" value={progress.withID} total={progress.total} color={colors.warning} />
+                  <ProgressStat label="With File No." value={progress.withFileNo} total={progress.total} color={colors.urban} />
+                </div>
+              </div>
+
               {/* Stats Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
                 <StatCard label="Total PAPs" value={stats.total} color={colors.primary} icon={Users} />
@@ -373,7 +599,7 @@ export default function Dashboard() {
                         </h3>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '12px' }}>
                           {ruralRoutes.map(route => (
-                            <RouteCard key={route.name} route={route} onClick={() => handleSelectRoute(route)} type="rural" />
+                            <RouteCard key={route.name} route={route} onClick={() => handleSelectRoute(route)} type="rural" households={households} />
                           ))}
                         </div>
                       </div>
@@ -391,7 +617,7 @@ export default function Dashboard() {
                         </h3>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '12px' }}>
                           {urbanRoutes.map(route => (
-                            <RouteCard key={route.name} route={route} onClick={() => handleSelectRoute(route)} type="urban" />
+                            <RouteCard key={route.name} route={route} onClick={() => handleSelectRoute(route)} type="urban" households={households} />
                           ))}
                         </div>
                       </div>
@@ -430,7 +656,7 @@ export default function Dashboard() {
                     <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
                     <input
                       type="text"
-                      placeholder="Search PAPs..."
+                      placeholder="Search PAPs in this route..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       style={{ 
@@ -541,7 +767,7 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* Footer - 4D Branded */}
+      {/* Footer */}
       <footer style={{ 
         backgroundColor: colors.bgCard, 
         borderTop: `1px solid ${colors.border}`, 
@@ -568,12 +794,39 @@ export default function Dashboard() {
   )
 }
 
+// Progress Stat Component
+function ProgressStat({ label, value, total, color }) {
+  const percentage = total > 0 ? Math.round((value / total) * 100) : 0
+  return (
+    <div style={{ 
+      padding: '12px 16px', 
+      backgroundColor: colors.bgLight, 
+      borderRadius: '10px',
+      border: `1px solid ${colors.border}`
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        <span style={{ fontSize: '12px', fontWeight: '600', color: colors.textMuted }}>{label}</span>
+        <span style={{ fontSize: '14px', fontWeight: '700', color }}>{percentage}%</span>
+      </div>
+      <div style={{ backgroundColor: colors.border, borderRadius: '4px', height: '6px', overflow: 'hidden' }}>
+        <div style={{ width: `${percentage}%`, height: '100%', backgroundColor: color, borderRadius: '4px', transition: 'width 0.3s' }} />
+      </div>
+      <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: colors.textLight }}>{value} of {total}</p>
+    </div>
+  )
+}
+
 // Route Card Component
-function RouteCard({ route, onClick, type }) {
+function RouteCard({ route, onClick, type, households }) {
   const isRural = type === 'rural'
   const cardColors = isRural 
     ? { bg: '#ecfdf5', border: '#a7f3d0', text: colors.rural, hover: '#dcfce7' }
     : { bg: '#f5f3ff', border: '#c4b5fd', text: colors.urban, hover: '#ede9fe' }
+  
+  // Calculate route progress
+  const routePAPs = households.filter(h => h.route_name === route.name)
+  const verifiedCount = routePAPs.filter(h => h.verification_status === 'verified').length
+  const progressPercent = routePAPs.length > 0 ? Math.round((verifiedCount / routePAPs.length) * 100) : 0
   
   return (
     <div onClick={onClick} 
@@ -596,14 +849,20 @@ function RouteCard({ route, onClick, type }) {
         e.currentTarget.style.backgroundColor = cardColors.bg
       }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
+        <div style={{ flex: 1 }}>
           <p style={{ fontWeight: '600', color: colors.textDark, margin: 0, fontSize: '14px' }}>{route.name}</p>
           <p style={{ fontSize: '13px', color: cardColors.text, margin: '4px 0 0 0', fontWeight: '600' }}>{route.pap_count} PAPs</p>
+          {/* Mini progress bar */}
+          <div style={{ marginTop: '8px', backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: '3px', height: '4px', overflow: 'hidden' }}>
+            <div style={{ width: `${progressPercent}%`, height: '100%', backgroundColor: cardColors.text, borderRadius: '3px' }} />
+          </div>
+          <p style={{ margin: '4px 0 0 0', fontSize: '10px', color: colors.textMuted }}>{verifiedCount} verified ({progressPercent}%)</p>
         </div>
         <div style={{ 
           width: '32px', height: '32px', borderRadius: '8px', 
           backgroundColor: `${cardColors.text}15`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          marginLeft: '12px'
         }}>
           <ChevronRight size={18} color={cardColors.text} />
         </div>
