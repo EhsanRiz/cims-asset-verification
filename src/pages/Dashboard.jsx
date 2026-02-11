@@ -65,7 +65,7 @@ export default function Dashboard() {
         .from('households')
         .select('*')
         .order('household_head_surname', { ascending: true })
-        .range(0, 1999) // Fetch up to 2000 records
+        .range(0, 2999) // Fetch up to 3000 records
       
       if (error) throw error
       
