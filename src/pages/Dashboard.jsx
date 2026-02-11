@@ -5,7 +5,7 @@ import {
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
-  Download, X, TrendingUp
+  Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -58,10 +58,82 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false)
 
   const isAdmin = user?.role === 'Admin' || user?.role === 'admin'
+  const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
+  const canApprove = isAdmin || isMamokuena
+
+  // Notifications state
+  const [notifications, setNotifications] = useState([])
+  const [showNotifications, setShowNotifications] = useState(false)
+  const [pendingApprovals, setPendingApprovals] = useState([])
+  const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => {
     loadData()
+    loadNotifications()
   }, [])
+
+  // Load notifications and pending approvals
+  const loadNotifications = async () => {
+    try {
+      // Load notifications for current user
+      const { data: notifData } = await supabase
+        .from('notifications')
+        .select('*')
+        .or(`user_id.eq.${user?.id},user_role.eq.${user?.role}`)
+        .order('created_at', { ascending: false })
+        .limit(20)
+      
+      if (notifData) {
+        setNotifications(notifData)
+        setUnreadCount(notifData.filter(n => !n.is_read).length)
+      }
+
+      // Load pending approvals if user can approve
+      if (canApprove) {
+        const { data: pendingData } = await supabase
+          .from('edit_requests')
+          .select('*, households(household_head_first_name, household_head_surname, route_name)')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+        
+        if (pendingData) {
+          setPendingApprovals(pendingData)
+        }
+      }
+
+      // Check for approval notifications for regular users
+      if (!canApprove) {
+        const { data: myApprovals } = await supabase
+          .from('edit_requests')
+          .select('*')
+          .eq('requested_by', user?.id)
+          .eq('requester_notified', false)
+          .in('status', ['approved', 'rejected'])
+        
+        if (myApprovals && myApprovals.length > 0) {
+          // Mark as notified and show alert
+          for (const approval of myApprovals) {
+            await supabase
+              .from('edit_requests')
+              .update({ requester_notified: true })
+              .eq('id', approval.id)
+          }
+          
+          const approvedCount = myApprovals.filter(a => a.status === 'approved').length
+          const rejectedCount = myApprovals.filter(a => a.status === 'rejected').length
+          
+          if (approvedCount > 0) {
+            alert(`🎉 Good news! ${approvedCount} of your edit(s) have been approved!`)
+          }
+          if (rejectedCount > 0) {
+            alert(`ℹ️ ${rejectedCount} of your edit(s) were not approved. Please check with your supervisor.`)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error loading notifications:', err)
+    }
+  }
 
   // Global search effect
   useEffect(() => {
@@ -214,38 +286,167 @@ export default function Dashboard() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      const { error } = await supabase
-        .from('households')
-        .update({
-          household_head_first_name: editedData.household_head_first_name,
-          household_head_surname: editedData.household_head_surname,
-          gender: editedData.gender,
-          id_number: editedData.id_number,
-          cellphone_no: editedData.cellphone_no,
-          file_number: editedData.file_number,
-          occupation_of_pap: editedData.occupation_of_pap,
-          community_council: editedData.community_council,
-          photograph_of_pap_url: editedData.photograph_of_pap_url,
-          id_document_url: editedData.id_document_url,
-          asset_photo_url: editedData.asset_photo_url,
-          map_url: editedData.map_url,
-          verification_status: editedData.verification_status,
-        })
-        .eq('id', editedData.id)
+      // Get the changes made
+      const changes = {}
+      const editableFields = [
+        'household_head_first_name', 'household_head_surname', 'gender',
+        'id_number', 'cellphone_no', 'file_number', 'occupation_of_pap',
+        'community_council', 'photograph_of_pap_url', 'id_document_url',
+        'asset_photo_url', 'map_url', 'verification_status'
+      ]
+      
+      editableFields.forEach(field => {
+        if (editedData[field] !== selectedHousehold[field]) {
+          changes[field] = {
+            old: selectedHousehold[field],
+            new: editedData[field]
+          }
+        }
+      })
 
-      if (error) throw error
+      // If user can approve (Admin or Mamokuena), save directly
+      if (canApprove) {
+        const { error } = await supabase
+          .from('households')
+          .update({
+            household_head_first_name: editedData.household_head_first_name,
+            household_head_surname: editedData.household_head_surname,
+            gender: editedData.gender,
+            id_number: editedData.id_number,
+            cellphone_no: editedData.cellphone_no,
+            file_number: editedData.file_number,
+            occupation_of_pap: editedData.occupation_of_pap,
+            community_council: editedData.community_council,
+            photograph_of_pap_url: editedData.photograph_of_pap_url,
+            id_document_url: editedData.id_document_url,
+            asset_photo_url: editedData.asset_photo_url,
+            map_url: editedData.map_url,
+            verification_status: editedData.verification_status,
+            last_edited_by: user?.id,
+            last_edited_by_name: user?.full_name,
+            last_edited_at: new Date().toISOString(),
+          })
+          .eq('id', editedData.id)
 
-      await loadData()
-      const updated = households.find(h => h.id === editedData.id)
-      if (updated) setSelectedHousehold(updated)
-      setEditMode(false)
-      alert('Changes saved successfully!')
+        if (error) throw error
+
+        await loadData()
+        const updated = households.find(h => h.id === editedData.id)
+        if (updated) setSelectedHousehold(updated)
+        setEditMode(false)
+        alert('✅ Changes saved successfully!')
+      } else {
+        // Regular user - submit for approval
+        if (Object.keys(changes).length === 0) {
+          alert('No changes detected.')
+          setSaving(false)
+          return
+        }
+
+        // Create edit request
+        const { error: reqError } = await supabase
+          .from('edit_requests')
+          .insert({
+            household_id: editedData.id,
+            requested_by: user?.id,
+            requested_by_name: user?.full_name,
+            changes: changes,
+            status: 'pending'
+          })
+
+        if (reqError) throw reqError
+
+        // Create notification for approvers
+        await supabase.from('notifications').insert([
+          {
+            user_role: 'Admin',
+            type: 'edit_request',
+            title: 'New Edit Request',
+            message: `${user?.full_name} has submitted changes for ${editedData.household_head_first_name} ${editedData.household_head_surname}`,
+            reference_type: 'household',
+            reference_id: editedData.id
+          }
+        ])
+
+        // Mark household as pending approval
+        await supabase
+          .from('households')
+          .update({ pending_approval: true })
+          .eq('id', editedData.id)
+
+        await loadData()
+        await loadNotifications()
+        setEditMode(false)
+        alert('📤 Your changes have been submitted for approval. You will be notified when approved.')
+      }
     } catch (err) {
       console.error('Save error:', err)
       alert('Error saving: ' + err.message)
     } finally {
       setSaving(false)
     }
+  }
+
+  // Handle approval/rejection of edit requests
+  const handleApproval = async (request, approved) => {
+    try {
+      if (approved) {
+        // Apply the changes to household
+        const updates = {}
+        Object.keys(request.changes).forEach(field => {
+          updates[field] = request.changes[field].new
+        })
+        updates.last_edited_by = request.requested_by
+        updates.last_edited_by_name = request.requested_by_name
+        updates.last_edited_at = new Date().toISOString()
+        updates.pending_approval = false
+
+        await supabase
+          .from('households')
+          .update(updates)
+          .eq('id', request.household_id)
+      } else {
+        // Just clear pending flag
+        await supabase
+          .from('households')
+          .update({ pending_approval: false })
+          .eq('id', request.household_id)
+      }
+
+      // Update the request status
+      await supabase
+        .from('edit_requests')
+        .update({
+          status: approved ? 'approved' : 'rejected',
+          reviewed_by: user?.id,
+          reviewed_by_name: user?.full_name,
+          reviewed_at: new Date().toISOString()
+        })
+        .eq('id', request.id)
+
+      // Create notification for the requester
+      await supabase.from('notifications').insert({
+        user_id: request.requested_by,
+        type: approved ? 'approval' : 'rejection',
+        title: approved ? 'Edit Approved ✅' : 'Edit Not Approved',
+        message: `Your changes for ${request.households?.household_head_first_name} ${request.households?.household_head_surname} have been ${approved ? 'approved' : 'rejected'} by ${user?.full_name}`,
+        reference_type: 'edit_request',
+        reference_id: request.id
+      })
+
+      await loadData()
+      await loadNotifications()
+      alert(approved ? '✅ Changes approved and applied!' : '❌ Request rejected')
+    } catch (err) {
+      console.error('Approval error:', err)
+      alert('Error: ' + err.message)
+    }
+  }
+
+  // Mark notification as read
+  const markNotificationRead = async (notifId) => {
+    await supabase.from('notifications').update({ is_read: true }).eq('id', notifId)
+    loadNotifications()
   }
 
   const handlePhotoUpload = async (field, file) => {
@@ -447,6 +648,132 @@ export default function Dashboard() {
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Notification Bell */}
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setShowNotifications(!showNotifications)} 
+                style={{ 
+                  padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', 
+                  border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.8)', 
+                  cursor: 'pointer', transition: 'all 0.2s', position: 'relative'
+                }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
+                <Bell size={18} />
+                {(unreadCount > 0 || pendingApprovals.length > 0) && (
+                  <span style={{ 
+                    position: 'absolute', top: '-4px', right: '-4px',
+                    backgroundColor: colors.error, color: 'white',
+                    fontSize: '10px', fontWeight: '700',
+                    minWidth: '18px', height: '18px',
+                    borderRadius: '9px', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center'
+                  }}>
+                    {unreadCount + pendingApprovals.length}
+                  </span>
+                )}
+              </button>
+              
+              {/* Notifications Dropdown */}
+              {showNotifications && (
+                <div style={{ 
+                  position: 'absolute', top: '100%', right: 0, marginTop: '8px',
+                  width: '360px', backgroundColor: colors.bgCard, 
+                  borderRadius: '12px', boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+                  border: `1px solid ${colors.border}`, zIndex: 1000,
+                  maxHeight: '500px', overflowY: 'auto'
+                }}>
+                  <div style={{ 
+                    padding: '14px 16px', borderBottom: `1px solid ${colors.border}`,
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                  }}>
+                    <span style={{ fontWeight: '700', color: colors.textDark }}>Notifications</span>
+                    <button onClick={() => setShowNotifications(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                      <X size={18} color={colors.textMuted} />
+                    </button>
+                  </div>
+                  
+                  {/* Pending Approvals for Admins */}
+                  {canApprove && pendingApprovals.length > 0 && (
+                    <div style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <div style={{ padding: '10px 16px', backgroundColor: `${colors.warning}15` }}>
+                        <span style={{ fontSize: '12px', fontWeight: '700', color: colors.warning }}>
+                          ⏳ PENDING APPROVALS ({pendingApprovals.length})
+                        </span>
+                      </div>
+                      {pendingApprovals.slice(0, 5).map(req => (
+                        <div key={req.id} style={{ 
+                          padding: '12px 16px', borderBottom: `1px solid ${colors.border}`,
+                          backgroundColor: colors.bgLight
+                        }}>
+                          <p style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: colors.textDark }}>
+                            {req.households?.household_head_first_name} {req.households?.household_head_surname}
+                          </p>
+                          <p style={{ margin: '4px 0 8px 0', fontSize: '12px', color: colors.textMuted }}>
+                            Edited by {req.requested_by_name} • {req.households?.route_name}
+                          </p>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={() => handleApproval(req, true)} style={{ 
+                              flex: 1, padding: '6px 12px', backgroundColor: colors.success, 
+                              color: 'white', border: 'none', borderRadius: '6px', 
+                              fontSize: '12px', fontWeight: '600', cursor: 'pointer'
+                            }}>
+                              ✓ Approve
+                            </button>
+                            <button onClick={() => handleApproval(req, false)} style={{ 
+                              flex: 1, padding: '6px 12px', backgroundColor: colors.error, 
+                              color: 'white', border: 'none', borderRadius: '6px',
+                              fontSize: '12px', fontWeight: '600', cursor: 'pointer'
+                            }}>
+                              ✕ Reject
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Regular Notifications */}
+                  {notifications.length > 0 ? (
+                    notifications.slice(0, 10).map(notif => (
+                      <div key={notif.id} onClick={() => markNotificationRead(notif.id)}
+                        style={{ 
+                          padding: '12px 16px', borderBottom: `1px solid ${colors.border}`,
+                          backgroundColor: notif.is_read ? colors.bgCard : `${colors.accent}10`,
+                          cursor: 'pointer'
+                        }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                          <div style={{ 
+                            padding: '6px', borderRadius: '8px',
+                            backgroundColor: notif.type === 'approval' ? `${colors.success}20` : 
+                              notif.type === 'rejection' ? `${colors.error}20` : `${colors.warning}20`
+                          }}>
+                            {notif.type === 'approval' ? <CheckCircle size={16} color={colors.success} /> :
+                             notif.type === 'rejection' ? <XCircle size={16} color={colors.error} /> :
+                             <Clock size={16} color={colors.warning} />}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <p style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: colors.textDark }}>
+                              {notif.title}
+                            </p>
+                            <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: colors.textMuted }}>
+                              {notif.message}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    !canApprove || pendingApprovals.length === 0 ? (
+                      <div style={{ padding: '30px', textAlign: 'center', color: colors.textMuted }}>
+                        <Bell size={32} style={{ opacity: 0.3 }} />
+                        <p style={{ marginTop: '8px', fontSize: '13px' }}>No notifications</p>
+                      </div>
+                    ) : null
+                  )}
+                </div>
+              )}
+            </div>
+            
             <div style={{ 
               width: '38px', height: '38px', borderRadius: '50%', 
               background: `linear-gradient(135deg, ${colors.accent} 0%, ${colors.accentHover} 100%)`,
@@ -459,9 +786,9 @@ export default function Dashboard() {
             </div>
             <div className="user-info" style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
-              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{user?.role}</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{user?.role}{canApprove ? ' • Can Approve' : ''}</span>
             </div>
-            <button onClick={() => { logout(); window.location.href = '/login' }} 
+            <button onClick={() => { logout(); window.location.hash = '#/login' }} 
               style={{ padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.8)', cursor: 'pointer', transition: 'all 0.2s' }}
               onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.3)'}
               onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
@@ -937,7 +1264,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          {isAdmin && !editMode && (
+          {!editMode && (
             <button onClick={() => setEditMode(true)} style={{ 
               display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
               backgroundColor: colors.warning, color: 'white', 
@@ -955,7 +1282,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
                 border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
                 opacity: saving ? 0.7 : 1
               }}>
-                <Save size={16} /> {saving ? 'Saving...' : 'Save'}
+                <Save size={16} /> {saving ? (isAdmin ? 'Saving...' : 'Submitting...') : (isAdmin ? 'Save' : 'Submit for Approval')}
               </button>
               <button onClick={() => { setEditMode(false); setEditedData({ ...household }) }} style={{ 
                 display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
@@ -965,7 +1292,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
                 <XCircle size={16} /> Cancel
               </button>
             </>
-          )}
+          )}}
           <button onClick={onPrint} style={{ 
             display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
             backgroundColor: colors.primary, color: 'white', 
@@ -1006,12 +1333,12 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="PAP Information" icon={User} color={colors.primary} colors={colors}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-              <Field label="First Name" value={data.household_head_first_name} field="household_head_first_name" editMode={editMode && isAdmin} onChange={onFieldChange} colors={colors} />
-              <Field label="Surname" value={data.household_head_surname} field="household_head_surname" editMode={editMode && isAdmin} onChange={onFieldChange} colors={colors} />
+              <Field label="First Name" value={data.household_head_first_name} field="household_head_first_name" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Surname" value={data.household_head_surname} field="household_head_surname" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="File Number" value={data.file_number} field="file_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="ID Number" value={data.id_number} field="id_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Phone" value={data.cellphone_no} field="cellphone_no" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Gender" value={data.gender} field="gender" editMode={editMode && isAdmin} onChange={onFieldChange} colors={colors} />
+              <Field label="Gender" value={data.gender} field="gender" editMode={editMode} onChange={onFieldChange} colors={colors} />
             </div>
           </Card>
 
