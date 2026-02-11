@@ -34,19 +34,25 @@ export default function Dashboard() {
   const loadData = async () => {
     try {
       setLoading(true)
+      console.log('Loading households...')
       
-      // Load all households with related data
+      // First, load just households without joins to ensure we get route_name
       const { data: householdData, error } = await supabase
         .from('households')
-        .select(`
-          *,
-          beneficiaries (*),
-          banking_details (*),
-          household_assets (*)
-        `)
+        .select('*')
         .order('household_head_surname', { ascending: true })
       
-      if (error) throw error
+      if (error) {
+        console.error('Supabase error:', error)
+        throw error
+      }
+      
+      console.log('Loaded households:', householdData?.length)
+      console.log('Sample household:', householdData?.[0])
+      
+      // Check route_name in data
+      const withRoutes = householdData?.filter(h => h.route_name) || []
+      console.log('Households with route_name:', withRoutes.length)
       
       setHouseholds(householdData || [])
       
@@ -66,6 +72,9 @@ export default function Dashboard() {
         }
       })
       
+      console.log('Unique routes found:', routeMap.size)
+      console.log('Routes:', Array.from(routeMap.keys()))
+      
       // Sort routes by name
       const sortedRoutes = Array.from(routeMap.values()).sort((a, b) => a.name.localeCompare(b.name))
       setRoutes(sortedRoutes)
@@ -74,6 +83,28 @@ export default function Dashboard() {
       console.error('Error loading data:', err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Load related data when selecting a PAP
+  const loadPAPDetails = async (pap) => {
+    try {
+      const { data, error } = await supabase
+        .from('households')
+        .select(`
+          *,
+          beneficiaries (*),
+          banking_details (*),
+          household_assets (*)
+        `)
+        .eq('id', pap.id)
+        .single()
+      
+      if (error) throw error
+      return data
+    } catch (err) {
+      console.error('Error loading PAP details:', err)
+      return pap
     }
   }
 
@@ -110,9 +141,11 @@ export default function Dashboard() {
     setView('paps')
   }
 
-  const handleSelectPAP = (h) => {
-    setSelectedHousehold(h)
-    setEditedData({ ...h })
+  const handleSelectPAP = async (h) => {
+    // Load full details including related data
+    const fullData = await loadPAPDetails(h)
+    setSelectedHousehold(fullData)
+    setEditedData({ ...fullData })
     setEditMode(false)
     setActiveTab('details')
     setView('detail')
@@ -158,7 +191,6 @@ export default function Dashboard() {
       if (error) throw error
 
       await loadData()
-      // Update selected household with new data
       const updated = households.find(h => h.id === editedData.id)
       if (updated) setSelectedHousehold(updated)
       setEditMode(false)
@@ -270,6 +302,15 @@ export default function Dashboard() {
                     <div style={{ width: '36px', height: '36px', border: '3px solid #e5e7eb', borderTopColor: '#0088c4', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
                     <p style={{ color: '#6b7280', marginTop: '12px', fontSize: '14px' }}>Loading routes...</p>
                   </div>
+                ) : routes.length === 0 ? (
+                  <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>
+                    <Map size={40} style={{ opacity: 0.3, marginBottom: '8px' }} />
+                    <p>No routes found. Please check if data is imported correctly.</p>
+                    <p style={{ fontSize: '12px', marginTop: '8px' }}>Total households loaded: {households.length}</p>
+                    <button onClick={loadData} style={{ marginTop: '12px', padding: '8px 16px', backgroundColor: '#0088c4', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+                      Reload Data
+                    </button>
+                  </div>
                 ) : (
                   <>
                     {/* Rural Routes */}
@@ -297,13 +338,6 @@ export default function Dashboard() {
                             <RouteCard key={route.name} route={route} onClick={() => handleSelectRoute(route)} type="urban" />
                           ))}
                         </div>
-                      </div>
-                    )}
-
-                    {routes.length === 0 && (
-                      <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>
-                        <Map size={40} style={{ opacity: 0.3, marginBottom: '8px' }} />
-                        <p>No routes found. Please import data first.</p>
                       </div>
                     )}
                   </>
@@ -535,7 +569,6 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
       {/* Content */}
       {activeTab === 'details' && (
         <div style={{ display: 'grid', gap: '16px' }}>
-          {/* PAP Details */}
           <Card title="PAP Information" icon={User} color="#0088c4">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
               <Field label="First Name" value={data.household_head_first_name} field="household_head_first_name" editMode={editMode && isAdmin} onChange={onFieldChange} />
@@ -547,7 +580,6 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
             </div>
           </Card>
 
-          {/* Location */}
           <Card title="Location" icon={MapPin} color="#8cc63f">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
               <Field label="Route" value={data.route_name} />
@@ -559,7 +591,6 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
             </div>
           </Card>
 
-          {/* Banking */}
           {data.banking_details?.length > 0 && (
             <Card title="Banking Details" icon={CreditCard} color="#6366f1">
               {data.banking_details.map((bank) => (
@@ -587,7 +618,6 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
             </div>
           </Card>
 
-          {/* Other Assets */}
           {data.other_assets_json && (
             <Card title="Other Affected Assets" icon={TreePine} color="#059669">
               <OtherAssets assets={data.other_assets_json} />
@@ -731,7 +761,7 @@ td{padding:5px 8px;border:1px solid #ddd}
 <img src="/logo-afdb.png" onerror="this.style.display='none'">
 <img src="/logo-4d.png" onerror="this.style.display='none'">
 </div>
-<div class="title"><h1>Asset Verification Form</h1><p>Foromo E Netefatso Ea Thepa • ${data.route_name}</p></div>
+<div class="title"><h1>Asset Verification Form</h1><p>Foromo E Netefatso Ea Thepa • ${data.route_name || ''}</p></div>
 
 <div class="section">
 <div class="section-title">PAP Information / Tlhahisoleseling Ea Mong'a Thepa</div>
