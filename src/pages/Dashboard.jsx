@@ -68,6 +68,11 @@ export default function Dashboard() {
   const [pendingApprovals, setPendingApprovals] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
 
+  // Add PAP state
+  const [showAddPAP, setShowAddPAP] = useState(false)
+  const [newPAPData, setNewPAPData] = useState({})
+  const [savingNewPAP, setSavingNewPAP] = useState(false)
+
   useEffect(() => {
     loadData()
     loadNotifications()
@@ -257,7 +262,7 @@ export default function Dashboard() {
   const stats = {
     total: households.length,
     routes: routes.length,
-    verified: households.filter(h => h.verification_status === 'verified' || h.approval_status === 'approved').length,
+    verified: households.filter(h => h.verification_status?.toLowerCase() === 'verified' || h.approval_status === 'approved').length,
     withGPS: households.filter(h => h.latitude && h.longitude).length
   }
 
@@ -445,6 +450,7 @@ export default function Dashboard() {
         updates.last_edited_by_name = request.requested_by_name
         updates.last_edited_at = new Date().toISOString()
         updates.pending_approval = false
+        updates.verification_status = 'Verified'
 
         await supabase
           .from('households')
@@ -582,6 +588,83 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Delete error:', err)
       alert('Error: ' + err.message)
+    }
+  }
+
+  // Start adding a new PAP
+  const handleStartAddPAP = () => {
+    setNewPAPData({
+      household_head_first_name: '',
+      household_head_surname: '',
+      gender: '',
+      id_number: '',
+      cellphone_no: '',
+      file_number: '',
+      occupation_of_pap: '',
+      community_council: '',
+      land_use: 'Res',
+      route_name: selectedRoute?.name || '',
+      route_type: selectedRoute?.type || '',
+      gps_coordinates: '',
+      latitude: '',
+      longitude: '',
+      affected_area_perm: '',
+      affected_area_temp: '',
+      rate_perm: '',
+      rate_temp: '',
+      disturbance_allowance: '',
+      total_compensation: '',
+      verification_status: 'pending',
+      other_documents: []
+    })
+    setShowAddPAP(true)
+  }
+
+  // Save new PAP
+  const handleSaveNewPAP = async () => {
+    if (!newPAPData.household_head_first_name || !newPAPData.household_head_surname) {
+      alert('Please enter at least First Name and Surname.')
+      return
+    }
+    setSavingNewPAP(true)
+    try {
+      // Clean numeric fields
+      const record = { ...newPAPData }
+      const numericFields = ['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp', 'disturbance_allowance', 'total_compensation', 'latitude', 'longitude']
+      numericFields.forEach(f => {
+        if (record[f] === '' || record[f] === null || record[f] === undefined) {
+          record[f] = null
+        } else {
+          record[f] = parseFloat(record[f]) || null
+        }
+      })
+
+      const { data: inserted, error } = await supabase
+        .from('households')
+        .insert(record)
+        .select()
+        .single()
+
+      if (error) throw error
+
+      await loadData()
+      setShowAddPAP(false)
+      setNewPAPData({})
+
+      // Navigate to the new PAP
+      if (inserted) {
+        setSelectedHousehold(inserted)
+        setEditedData({ ...inserted })
+        setView('detail')
+        setActiveTab('details')
+      }
+
+      alert('✅ New PAP added successfully!')
+    } catch (err) {
+      console.error('Error adding PAP:', err)
+      alert('Error adding PAP: ' + err.message)
+    } finally {
+      setSavingNewPAP(false)
     }
   }
 
@@ -1118,7 +1201,16 @@ export default function Dashboard() {
                       }}>{selectedRoute.type}</span> • {filteredPAPs.length} PAPs
                     </p>
                   </div>
-                  <div style={{ position: 'relative', width: '260px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <button onClick={handleStartAddPAP} style={{
+                      display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px',
+                      backgroundColor: colors.accent, color: 'white', border: 'none',
+                      borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                      boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
+                    }}>
+                      <Plus size={16} /> Add PAP
+                    </button>
+                    <div style={{ position: 'relative', width: '220px' }}>
                     <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
                     <input
                       type="text"
@@ -1193,8 +1285,8 @@ export default function Dashboard() {
                           <td style={{ padding: '16px 20px' }}>
                             <span style={{ 
                               padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '600',
-                              backgroundColor: pap.verification_status === 'verified' ? `${colors.success}20` : `${colors.warning}20`,
-                              color: pap.verification_status === 'verified' ? colors.success : colors.warning
+                              backgroundColor: pap.verification_status?.toLowerCase() === 'verified' ? `${colors.success}20` : `${colors.warning}20`,
+                              color: pap.verification_status?.toLowerCase() === 'verified' ? colors.success : colors.warning
                             }}>
                               {pap.verification_status || 'pending'}
                             </span>
@@ -1233,6 +1325,115 @@ export default function Dashboard() {
             />
           )}
         </div>
+
+        {/* Add PAP Modal */}
+        {showAddPAP && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '20px'
+          }}>
+            <div style={{
+              backgroundColor: colors.bgCard, borderRadius: '16px',
+              width: '100%', maxWidth: '700px', maxHeight: '90vh',
+              overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+            }}>
+              {/* Modal Header */}
+              <div style={{
+                padding: '20px 24px', borderBottom: `1px solid ${colors.border}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                position: 'sticky', top: 0, backgroundColor: colors.bgCard, zIndex: 1,
+                borderRadius: '16px 16px 0 0'
+              }}>
+                <div>
+                  <h2 style={{ fontSize: '18px', fontWeight: '700', color: colors.textDark, margin: 0 }}>
+                    Add New PAP
+                  </h2>
+                  <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>
+                    {selectedRoute?.name} • {selectedRoute?.type}
+                  </p>
+                </div>
+                <button onClick={() => setShowAddPAP(false)} style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: '8px'
+                }}>
+                  <X size={20} color={colors.textMuted} />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div style={{ padding: '20px 24px' }}>
+                <Card title="PAP Information" icon={User} color={colors.primary} colors={colors}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                    <Field label="First Name *" value={newPAPData.household_head_first_name} field="household_head_first_name" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Surname *" value={newPAPData.household_head_surname} field="household_head_surname" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="File Number" value={newPAPData.file_number} field="file_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  </div>
+                </Card>
+
+                <div style={{ height: '16px' }} />
+
+                <Card title="Location" icon={MapPin} color={colors.accent} colors={colors}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                    <Field label="Route" value={newPAPData.route_name} colors={colors} />
+                    <Field label="Route Type" value={newPAPData.route_type} colors={colors} />
+                    <Field label="Land Use" value={newPAPData.land_use} field="land_use" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="GPS Coordinates" value={newPAPData.gps_coordinates} field="gps_coordinates" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Latitude" value={newPAPData.latitude} field="latitude" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Longitude" value={newPAPData.longitude} field="longitude" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  </div>
+                </Card>
+
+                <div style={{ height: '16px' }} />
+
+                <Card title="Valuation" icon={FileText} color={colors.urban} colors={colors}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                    <Field label="Permanent Area (sqm)" value={newPAPData.affected_area_perm} field="affected_area_perm" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Temporary Area (sqm)" value={newPAPData.affected_area_temp} field="affected_area_temp" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Perm. Rate (M/sqm)" value={newPAPData.rate_perm} field="rate_perm" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Temp. Rate (M/sqm)" value={newPAPData.rate_temp} field="rate_temp" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Disturbance Allowance (M)" value={newPAPData.disturbance_allowance} field="disturbance_allowance" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                    <Field label="Total Compensation (M)" value={newPAPData.total_compensation} field="total_compensation" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  </div>
+                </Card>
+              </div>
+
+              {/* Modal Footer */}
+              <div style={{
+                padding: '16px 24px', borderTop: `1px solid ${colors.border}`,
+                display: 'flex', gap: '10px', justifyContent: 'flex-end',
+                position: 'sticky', bottom: 0, backgroundColor: colors.bgCard,
+                borderRadius: '0 0 16px 16px'
+              }}>
+                <button onClick={() => setShowAddPAP(false)} style={{
+                  padding: '12px 24px', backgroundColor: colors.bgLight,
+                  border: `1px solid ${colors.border}`, borderRadius: '10px',
+                  color: colors.textDark, fontSize: '14px', fontWeight: '600', cursor: 'pointer'
+                }}>
+                  Cancel
+                </button>
+                <button onClick={handleSaveNewPAP} disabled={savingNewPAP} style={{
+                  padding: '12px 24px', backgroundColor: savingNewPAP ? '#94a3b8' : colors.accent,
+                  border: 'none', borderRadius: '10px', color: 'white',
+                  fontSize: '14px', fontWeight: '700', cursor: savingNewPAP ? 'default' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
+                }}>
+                  {savingNewPAP ? (
+                    <><div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> Saving...</>
+                  ) : (
+                    <><Save size={16} /> Save PAP</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Footer */}
@@ -1293,7 +1494,7 @@ function RouteCard({ route, onClick, type, households }) {
   
   // Calculate route progress
   const routePAPs = households.filter(h => h.route_name === route.name)
-  const verifiedCount = routePAPs.filter(h => h.verification_status === 'verified').length
+  const verifiedCount = routePAPs.filter(h => h.verification_status?.toLowerCase() === 'verified').length
   const progressPercent = routePAPs.length > 0 ? Math.round((verifiedCount / routePAPs.length) * 100) : 0
   
   return (
