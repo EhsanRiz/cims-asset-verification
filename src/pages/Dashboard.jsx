@@ -77,32 +77,15 @@ export default function Dashboard() {
     loadData()
     loadNotifications()
 
-    // Real-time subscriptions — auto-refresh across all devices
-    const householdsChannel = supabase
-      .channel('households-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, () => {
-        loadData()
-      })
-      .subscribe()
-
-    const editRequestsChannel = supabase
-      .channel('edit-requests-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'edit_requests' }, () => {
-        loadNotifications()
-      })
-      .subscribe()
-
-    const notificationsChannel = supabase
-      .channel('notifications-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
-        loadNotifications()
-      })
-      .subscribe()
+    // Real-time subscriptions
+    const ch1 = supabase.channel('households-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, () => loadData()).subscribe()
+    const ch2 = supabase.channel('edit-requests-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'edit_requests' }, () => loadNotifications()).subscribe()
+    const ch3 = supabase.channel('notifications-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => loadNotifications()).subscribe()
 
     return () => {
-      supabase.removeChannel(householdsChannel)
-      supabase.removeChannel(editRequestsChannel)
-      supabase.removeChannel(notificationsChannel)
+      supabase.removeChannel(ch1)
+      supabase.removeChannel(ch2)
+      supabase.removeChannel(ch3)
     }
   }, [])
 
@@ -110,19 +93,12 @@ export default function Dashboard() {
   const loadNotifications = async () => {
     try {
       // Load notifications for current user
-      let notifQuery = supabase
-        .from('notifications')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(20)
-
+      let notifQuery = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(20)
       if (canApprove) {
-        // Approvers see their own notifications + all approver notifications
         notifQuery = notifQuery.or(`user_id.eq.${user?.id},user_role.eq.${user?.role},user_role.eq.Admin,user_role.eq.approver`)
       } else {
         notifQuery = notifQuery.or(`user_id.eq.${user?.id},user_role.eq.${user?.role}`)
       }
-
       const { data: notifData } = await notifQuery
       
       if (notifData) {
@@ -334,9 +310,7 @@ export default function Dashboard() {
         'household_head_first_name', 'household_head_surname', 'gender',
         'id_number', 'cellphone_no', 'file_number', 'occupation_of_pap',
         'community_council', 'photograph_of_pap_url', 'id_document_url',
-        'asset_photo_url', 'map_url', 'verification_status',
-        'affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp',
-        'disturbance_allowance', 'total_compensation'
+        'asset_photo_url', 'map_url', 'verification_status'
       ]
       
       editableFields.forEach(field => {
@@ -366,12 +340,6 @@ export default function Dashboard() {
             asset_photo_url: editedData.asset_photo_url,
             map_url: editedData.map_url,
             verification_status: editedData.verification_status,
-            affected_area_perm: editedData.affected_area_perm || null,
-            affected_area_temp: editedData.affected_area_temp || null,
-            rate_perm: editedData.rate_perm || null,
-            rate_temp: editedData.rate_temp || null,
-            disturbance_allowance: editedData.disturbance_allowance || null,
-            total_compensation: editedData.total_compensation || null,
             last_edited_by: user?.id,
             last_edited_by_name: user?.full_name,
             last_edited_at: new Date().toISOString(),
@@ -528,7 +496,7 @@ export default function Dashboard() {
     }
   }
 
-  // Handle document file upload (PDF, image, etc.)
+  // Handle document file upload
   const handleDocumentUpload = async (file, docName) => {
     if (!file || !selectedHousehold) return
     try {
@@ -537,30 +505,16 @@ export default function Dashboard() {
       const fileName = `${selectedHousehold.id}_doc_${timestamp}.${fileExt}`
       const filePath = `photos/${fileName}`
 
-      const { error: uploadError } = await supabase.storage
-        .from('cims-documents')
-        .upload(filePath, file, { upsert: true })
-
+      const { error: uploadError } = await supabase.storage.from('cims-documents').upload(filePath, file, { upsert: true })
       if (uploadError) throw uploadError
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('cims-documents')
-        .getPublicUrl(filePath)
+      const { data: { publicUrl } } = supabase.storage.from('cims-documents').getPublicUrl(filePath)
 
-      // Add to other_documents array
       const existing = selectedHousehold.other_documents || []
-      const newDoc = {
-        name: docName || file.name,
-        url: publicUrl,
-        uploaded_at: new Date().toISOString(),
-        file_type: fileExt.toLowerCase()
-      }
+      const newDoc = { name: docName || file.name, url: publicUrl, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase() }
       const updated = [...existing, newDoc]
 
-      await supabase.from('households')
-        .update({ other_documents: updated })
-        .eq('id', selectedHousehold.id)
-
+      await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
       setEditedData(prev => ({ ...prev, other_documents: updated }))
       return true
@@ -570,18 +524,14 @@ export default function Dashboard() {
     }
   }
 
-  // Delete a scanned document
+  // Delete a document
   const handleDeleteDocument = async (index) => {
     if (!selectedHousehold) return
     if (!confirm('Delete this document?')) return
     try {
       const existing = selectedHousehold.other_documents || []
       const updated = existing.filter((_, i) => i !== index)
-
-      await supabase.from('households')
-        .update({ other_documents: updated })
-        .eq('id', selectedHousehold.id)
-
+      await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
       setEditedData(prev => ({ ...prev, other_documents: updated }))
       alert('Document deleted.')
@@ -594,28 +544,12 @@ export default function Dashboard() {
   // Start adding a new PAP
   const handleStartAddPAP = () => {
     setNewPAPData({
-      household_head_first_name: '',
-      household_head_surname: '',
-      gender: '',
-      id_number: '',
-      cellphone_no: '',
-      file_number: '',
-      occupation_of_pap: '',
-      community_council: '',
-      land_use: 'Res',
-      route_name: selectedRoute?.name || '',
-      route_type: selectedRoute?.type || '',
-      gps_coordinates: '',
-      latitude: '',
-      longitude: '',
-      affected_area_perm: '',
-      affected_area_temp: '',
-      rate_perm: '',
-      rate_temp: '',
-      disturbance_allowance: '',
-      total_compensation: '',
-      verification_status: 'pending',
-      other_documents: []
+      household_head_first_name: '', household_head_surname: '', gender: '', id_number: '',
+      cellphone_no: '', file_number: '', occupation_of_pap: '', community_council: '',
+      land_use: 'Res', route_name: selectedRoute?.name || '', route_type: selectedRoute?.type || '',
+      gps_coordinates: '', latitude: '', longitude: '',
+      affected_area_perm: '', affected_area_temp: '', rate_perm: '', rate_temp: '',
+      disturbance_allowance: '', total_compensation: '', verification_status: 'pending', other_documents: []
     })
     setShowAddPAP(true)
   }
@@ -628,44 +562,22 @@ export default function Dashboard() {
     }
     setSavingNewPAP(true)
     try {
-      // Clean numeric fields
       const record = { ...newPAPData }
       const numericFields = ['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp', 'disturbance_allowance', 'total_compensation', 'latitude', 'longitude']
-      numericFields.forEach(f => {
-        if (record[f] === '' || record[f] === null || record[f] === undefined) {
-          record[f] = null
-        } else {
-          record[f] = parseFloat(record[f]) || null
-        }
-      })
+      numericFields.forEach(f => { record[f] = record[f] === '' || record[f] == null ? null : (parseFloat(record[f]) || null) })
 
-      const { data: inserted, error } = await supabase
-        .from('households')
-        .insert(record)
-        .select()
-        .single()
-
+      const { data: inserted, error } = await supabase.from('households').insert(record).select().single()
       if (error) throw error
 
       await loadData()
       setShowAddPAP(false)
       setNewPAPData({})
-
-      // Navigate to the new PAP
-      if (inserted) {
-        setSelectedHousehold(inserted)
-        setEditedData({ ...inserted })
-        setView('detail')
-        setActiveTab('details')
-      }
-
+      if (inserted) { setSelectedHousehold(inserted); setEditedData({ ...inserted }); setView('detail'); setActiveTab('details') }
       alert('✅ New PAP added successfully!')
     } catch (err) {
       console.error('Error adding PAP:', err)
       alert('Error adding PAP: ' + err.message)
-    } finally {
-      setSavingNewPAP(false)
-    }
+    } finally { setSavingNewPAP(false) }
   }
 
   // Export to Excel function
@@ -681,9 +593,7 @@ export default function Dashboard() {
       'ID Number': h.id_number || '',
       'Phone': h.cellphone_no || '',
       'Permanent Area (sqm)': h.affected_area_perm || '',
-      'Perm. Rate (M/sqm)': h.rate_perm || '',
       'Temporary Area (sqm)': h.affected_area_temp || '',
-      'Temp. Rate (M/sqm)': h.rate_temp || '',
       'Disturbance Allowance (M)': h.disturbance_allowance || '',
       'Total Compensation (M)': h.total_compensation || '',
       'Latitude': h.latitude || '',
@@ -904,35 +814,18 @@ export default function Dashboard() {
                           <p style={{ margin: '4px 0 8px 0', fontSize: '12px', color: colors.textMuted }}>
                             Edited by {req.requested_by_name} • {req.households?.route_name}
                           </p>
-
-                          {/* Show what changed */}
                           {req.changes && Object.keys(req.changes).length > 0 && (
-                            <div style={{ 
-                              backgroundColor: colors.bgCard, borderRadius: '8px', 
-                              padding: '8px 10px', marginBottom: '10px',
-                              border: `1px solid ${colors.border}`, fontSize: '12px'
-                            }}>
-                              {Object.entries(req.changes).map(([field, vals]) => {
-                                const label = field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-                                return (
-                                  <div key={field} style={{ 
-                                    display: 'flex', gap: '6px', padding: '4px 0',
-                                    borderBottom: `1px solid ${colors.border}22`, alignItems: 'baseline'
-                                  }}>
-                                    <span style={{ fontWeight: '600', color: colors.textMuted, minWidth: '90px', flexShrink: 0 }}>{label}:</span>
-                                    <span style={{ color: colors.error, textDecoration: 'line-through', opacity: 0.7 }}>
-                                      {vals.old || '(empty)'}
-                                    </span>
-                                    <span style={{ color: colors.textMuted }}>→</span>
-                                    <span style={{ color: colors.success, fontWeight: '600' }}>
-                                      {vals.new || '(empty)'}
-                                    </span>
-                                  </div>
-                                )
-                              })}
+                            <div style={{ backgroundColor: colors.bgCard, borderRadius: '8px', padding: '8px 10px', marginBottom: '10px', border: `1px solid ${colors.border}`, fontSize: '12px' }}>
+                              {Object.entries(req.changes).map(([field, vals]) => (
+                                <div key={field} style={{ display: 'flex', gap: '6px', padding: '4px 0', borderBottom: `1px solid ${colors.border}22`, alignItems: 'baseline' }}>
+                                  <span style={{ fontWeight: '600', color: colors.textMuted, minWidth: '90px', flexShrink: 0 }}>{field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}:</span>
+                                  <span style={{ color: colors.error, textDecoration: 'line-through', opacity: 0.7 }}>{vals.old || '(empty)'}</span>
+                                  <span style={{ color: colors.textMuted }}>→</span>
+                                  <span style={{ color: colors.success, fontWeight: '600' }}>{vals.new || '(empty)'}</span>
+                                </div>
+                              ))}
                             </div>
                           )}
-
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <button onClick={() => handleApproval(req, true)} style={{ 
                               flex: 1, padding: '6px 12px', backgroundColor: colors.success, 
@@ -1228,6 +1121,7 @@ export default function Dashboard() {
                       onBlur={e => e.target.style.borderColor = colors.border}
                     />
                   </div>
+                  </div>
                 </div>
               </div>
 
@@ -1325,115 +1219,62 @@ export default function Dashboard() {
             />
           )}
         </div>
-
-        {/* Add PAP Modal */}
-        {showAddPAP && (
-          <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '20px'
-          }}>
-            <div style={{
-              backgroundColor: colors.bgCard, borderRadius: '16px',
-              width: '100%', maxWidth: '700px', maxHeight: '90vh',
-              overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
-            }}>
-              {/* Modal Header */}
-              <div style={{
-                padding: '20px 24px', borderBottom: `1px solid ${colors.border}`,
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                position: 'sticky', top: 0, backgroundColor: colors.bgCard, zIndex: 1,
-                borderRadius: '16px 16px 0 0'
-              }}>
-                <div>
-                  <h2 style={{ fontSize: '18px', fontWeight: '700', color: colors.textDark, margin: 0 }}>
-                    Add New PAP
-                  </h2>
-                  <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>
-                    {selectedRoute?.name} • {selectedRoute?.type}
-                  </p>
+      {/* Add PAP Modal */}
+      {showAddPAP && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '700px', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, backgroundColor: colors.bgCard, zIndex: 1, borderRadius: '16px 16px 0 0' }}>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: '700', color: colors.textDark, margin: 0 }}>Add New PAP</h2>
+                <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>{selectedRoute?.name} • {selectedRoute?.type}</p>
+              </div>
+              <button onClick={() => setShowAddPAP(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '8px' }}><X size={20} color={colors.textMuted} /></button>
+            </div>
+            <div style={{ padding: '20px 24px' }}>
+              <Card title="PAP Information" icon={User} color={colors.primary} colors={colors}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                  <Field label="First Name *" value={newPAPData.household_head_first_name} field="household_head_first_name" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Surname *" value={newPAPData.household_head_surname} field="household_head_surname" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="File Number" value={newPAPData.file_number} field="file_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                 </div>
-                <button onClick={() => setShowAddPAP(false)} style={{
-                  background: 'none', border: 'none', cursor: 'pointer', padding: '8px'
-                }}>
-                  <X size={20} color={colors.textMuted} />
-                </button>
-              </div>
-
-              {/* Modal Body */}
-              <div style={{ padding: '20px 24px' }}>
-                <Card title="PAP Information" icon={User} color={colors.primary} colors={colors}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-                    <Field label="First Name *" value={newPAPData.household_head_first_name} field="household_head_first_name" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Surname *" value={newPAPData.household_head_surname} field="household_head_surname" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="File Number" value={newPAPData.file_number} field="file_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                  </div>
-                </Card>
-
-                <div style={{ height: '16px' }} />
-
-                <Card title="Location" icon={MapPin} color={colors.accent} colors={colors}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-                    <Field label="Route" value={newPAPData.route_name} colors={colors} />
-                    <Field label="Route Type" value={newPAPData.route_type} colors={colors} />
-                    <Field label="Land Use" value={newPAPData.land_use} field="land_use" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="GPS Coordinates" value={newPAPData.gps_coordinates} field="gps_coordinates" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Latitude" value={newPAPData.latitude} field="latitude" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Longitude" value={newPAPData.longitude} field="longitude" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                  </div>
-                </Card>
-
-                <div style={{ height: '16px' }} />
-
-                <Card title="Valuation" icon={FileText} color={colors.urban} colors={colors}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-                    <Field label="Permanent Area (sqm)" value={newPAPData.affected_area_perm} field="affected_area_perm" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Temporary Area (sqm)" value={newPAPData.affected_area_temp} field="affected_area_temp" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Perm. Rate (M/sqm)" value={newPAPData.rate_perm} field="rate_perm" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Temp. Rate (M/sqm)" value={newPAPData.rate_temp} field="rate_temp" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Disturbance Allowance (M)" value={newPAPData.disturbance_allowance} field="disturbance_allowance" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                    <Field label="Total Compensation (M)" value={newPAPData.total_compensation} field="total_compensation" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                  </div>
-                </Card>
-              </div>
-
-              {/* Modal Footer */}
-              <div style={{
-                padding: '16px 24px', borderTop: `1px solid ${colors.border}`,
-                display: 'flex', gap: '10px', justifyContent: 'flex-end',
-                position: 'sticky', bottom: 0, backgroundColor: colors.bgCard,
-                borderRadius: '0 0 16px 16px'
-              }}>
-                <button onClick={() => setShowAddPAP(false)} style={{
-                  padding: '12px 24px', backgroundColor: colors.bgLight,
-                  border: `1px solid ${colors.border}`, borderRadius: '10px',
-                  color: colors.textDark, fontSize: '14px', fontWeight: '600', cursor: 'pointer'
-                }}>
-                  Cancel
-                </button>
-                <button onClick={handleSaveNewPAP} disabled={savingNewPAP} style={{
-                  padding: '12px 24px', backgroundColor: savingNewPAP ? '#94a3b8' : colors.accent,
-                  border: 'none', borderRadius: '10px', color: 'white',
-                  fontSize: '14px', fontWeight: '700', cursor: savingNewPAP ? 'default' : 'pointer',
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
-                }}>
-                  {savingNewPAP ? (
-                    <><div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> Saving...</>
-                  ) : (
-                    <><Save size={16} /> Save PAP</>
-                  )}
-                </button>
-              </div>
+              </Card>
+              <div style={{ height: '16px' }} />
+              <Card title="Location" icon={MapPin} color={colors.accent} colors={colors}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                  <Field label="Route" value={newPAPData.route_name} colors={colors} />
+                  <Field label="Route Type" value={newPAPData.route_type} colors={colors} />
+                  <Field label="Land Use" value={newPAPData.land_use} field="land_use" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="GPS Coordinates" value={newPAPData.gps_coordinates} field="gps_coordinates" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Latitude" value={newPAPData.latitude} field="latitude" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Longitude" value={newPAPData.longitude} field="longitude" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                </div>
+              </Card>
+              <div style={{ height: '16px' }} />
+              <Card title="Valuation" icon={FileText} color={colors.urban} colors={colors}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+                  <Field label="Permanent Area (sqm)" value={newPAPData.affected_area_perm} field="affected_area_perm" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Temporary Area (sqm)" value={newPAPData.affected_area_temp} field="affected_area_temp" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Perm. Rate (M/sqm)" value={newPAPData.rate_perm} field="rate_perm" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Temp. Rate (M/sqm)" value={newPAPData.rate_temp} field="rate_temp" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Disturbance Allowance (M)" value={newPAPData.disturbance_allowance} field="disturbance_allowance" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Total Compensation (M)" value={newPAPData.total_compensation} field="total_compensation" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                </div>
+              </Card>
+            </div>
+            <div style={{ padding: '16px 24px', borderTop: `1px solid ${colors.border}`, display: 'flex', gap: '10px', justifyContent: 'flex-end', position: 'sticky', bottom: 0, backgroundColor: colors.bgCard, borderRadius: '0 0 16px 16px' }}>
+              <button onClick={() => setShowAddPAP(false)} style={{ padding: '12px 24px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '10px', color: colors.textDark, fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={handleSaveNewPAP} disabled={savingNewPAP} style={{ padding: '12px 24px', backgroundColor: savingNewPAP ? '#94a3b8' : colors.accent, border: 'none', borderRadius: '10px', color: 'white', fontSize: '14px', fontWeight: '700', cursor: savingNewPAP ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)' }}>
+                {savingNewPAP ? 'Saving...' : 'Save PAP'}
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
       </main>
 
       {/* Footer */}
@@ -1713,12 +1554,12 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Affected Area & Compensation" icon={Home} color={colors.primary} colors={colors}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Total Compensation (M)" value={data.total_compensation} field="total_compensation" editMode={editMode} onChange={onFieldChange} highlight colors={colors} />
+              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} colors={colors} />
+              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} colors={colors} />
+              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} colors={colors} />
+              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} colors={colors} />
+              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} colors={colors} />
+              <Field label="Total Compensation (M)" value={data.total_compensation} highlight colors={colors} />
             </div>
           </Card>
 
@@ -1740,14 +1581,8 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               <PhotoFrame label="Location Map" field="map_url" url={data.map_url} onUpload={onPhotoUpload} colors={colors} />
             </div>
           </Card>
-
           <Card title="Other Documents" icon={FileUp} color={colors.urban} colors={colors}>
-            <DocumentUploader 
-              documents={data.other_documents || []} 
-              onUpload={onDocumentUpload} 
-              onDelete={onDeleteDocument}
-              colors={colors} 
-            />
+            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} colors={colors} />
           </Card>
         </div>
       )}
@@ -1876,31 +1711,23 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
   )
 }
 
-// Document Uploader - asks how many docs, provides upload slots
+// Document Uploader component
 function DocumentUploader({ documents, onUpload, onDelete, colors }) {
   const [addingDocs, setAddingDocs] = useState(false)
   const [docCount, setDocCount] = useState(1)
-  const [slots, setSlots] = useState([]) // { name: '', file: null, uploading: false, done: false }
+  const [slots, setSlots] = useState([])
   const [uploading, setUploading] = useState(false)
 
   const handleStart = () => {
-    const count = Math.max(1, Math.min(10, docCount))
-    setSlots(Array.from({ length: count }, (_, i) => ({
-      name: '', file: null, uploading: false, done: false, error: null
-    })))
+    setSlots(Array.from({ length: Math.max(1, Math.min(10, docCount)) }, () => ({ name: '', file: null, uploading: false, done: false, error: null })))
     setAddingDocs(true)
   }
 
-  const updateSlot = (index, updates) => {
-    setSlots(prev => prev.map((s, i) => i === index ? { ...s, ...updates } : s))
-  }
+  const updateSlot = (index, updates) => setSlots(prev => prev.map((s, i) => i === index ? { ...s, ...updates } : s))
 
   const handleUploadAll = async () => {
     const toUpload = slots.filter(s => s.file && !s.done)
-    if (toUpload.length === 0) {
-      alert('Please select at least one file.')
-      return
-    }
+    if (toUpload.length === 0) { alert('Please select at least one file.'); return }
     setUploading(true)
     let successCount = 0
     for (let i = 0; i < slots.length; i++) {
@@ -1911,168 +1738,63 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
         await onUpload(slot.file, slot.name || slot.file.name)
         updateSlot(i, { uploading: false, done: true })
         successCount++
-      } catch (err) {
-        updateSlot(i, { uploading: false, error: err.message })
-      }
+      } catch (err) { updateSlot(i, { uploading: false, error: err.message }) }
     }
     setUploading(false)
     if (successCount > 0) {
-      alert(`✅ ${successCount} document${successCount > 1 ? 's' : ''} uploaded successfully!`)
-      setAddingDocs(false)
-      setSlots([])
-      setDocCount(1)
+      alert(`✅ ${successCount} document${successCount > 1 ? 's' : ''} uploaded!`)
+      setAddingDocs(false); setSlots([]); setDocCount(1)
     }
   }
 
-  const handleCancel = () => {
-    setAddingDocs(false)
-    setSlots([])
-    setDocCount(1)
-  }
-
-  // Adding documents mode
   if (addingDocs) {
     return (
       <div>
         <div style={{ display: 'grid', gap: '12px', marginBottom: '16px' }}>
           {slots.map((slot, i) => (
-            <div key={i} style={{
-              padding: '14px 16px', borderRadius: '10px',
-              border: `1px solid ${slot.done ? colors.accent : slot.error ? '#ef4444' : colors.border}`,
-              backgroundColor: slot.done ? `${colors.accent}08` : slot.error ? '#fef2f2' : colors.bgLight
-            }}>
+            <div key={i} style={{ padding: '14px 16px', borderRadius: '10px', border: `1px solid ${slot.done ? colors.accent : slot.error ? '#ef4444' : colors.border}`, backgroundColor: slot.done ? `${colors.accent}08` : colors.bgLight }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                <div style={{
-                  width: '28px', height: '28px', borderRadius: '6px',
-                  backgroundColor: slot.done ? `${colors.accent}20` : `${colors.urban}15`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-                }}>
-                  {slot.done ? <Check size={14} color={colors.accent} /> :
-                   slot.uploading ? <div style={{ width: '14px', height: '14px', border: '2px solid #e5e7eb', borderTopColor: colors.accent, borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> :
-                   <span style={{ fontSize: '12px', fontWeight: '700', color: colors.urban }}>{i + 1}</span>}
+                <div style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: slot.done ? `${colors.accent}20` : `${colors.urban}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {slot.done ? <Check size={14} color={colors.accent} /> : <span style={{ fontSize: '12px', fontWeight: '700', color: colors.urban }}>{i + 1}</span>}
                 </div>
-                <span style={{ fontSize: '13px', fontWeight: '600', color: colors.textDark }}>
-                  Document {i + 1}
-                </span>
+                <span style={{ fontSize: '13px', fontWeight: '600', color: colors.textDark }}>Document {i + 1}</span>
                 {slot.done && <span style={{ fontSize: '12px', color: colors.accent, fontWeight: '600' }}>✓ Uploaded</span>}
               </div>
-
-              {!slot.done && (
-                <>
-                  <input
-                    type="text"
-                    placeholder="Document name (e.g. Lease Agreement)"
-                    value={slot.name}
-                    onChange={(e) => updateSlot(i, { name: e.target.value })}
-                    style={{
-                      width: '100%', padding: '9px 12px', borderRadius: '8px',
-                      border: `1px solid ${colors.border}`, fontSize: '13px',
-                      outline: 'none', boxSizing: 'border-box', marginBottom: '8px',
-                      backgroundColor: 'white'
-                    }}
-                  />
-                  <label style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                    padding: '10px', borderRadius: '8px', cursor: 'pointer',
-                    border: `1px dashed ${slot.file ? colors.accent : colors.border}`,
-                    backgroundColor: slot.file ? `${colors.accent}08` : 'white',
-                    fontSize: '13px', color: slot.file ? colors.accent : colors.textMuted,
-                    fontWeight: slot.file ? '600' : '400'
-                  }}>
-                    {slot.file ? (
-                      <><Check size={14} /> {slot.file.name}</>
-                    ) : (
-                      <><Upload size={14} /> Choose file (PDF, image, or photo)</>
-                    )}
-                    <input
-                      type="file"
-                      accept="image/*,.pdf"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0]
-                        if (f) updateSlot(i, { file: f })
-                      }}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
-                  {slot.error && (
-                    <p style={{ fontSize: '12px', color: '#ef4444', margin: '6px 0 0 0' }}>Error: {slot.error}</p>
-                  )}
-                </>
-              )}
+              {!slot.done && (<>
+                <input type="text" placeholder="Document name (e.g. Lease Agreement)" value={slot.name} onChange={(e) => updateSlot(i, { name: e.target.value })} style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, fontSize: '13px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px', backgroundColor: 'white' }} />
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px', borderRadius: '8px', cursor: 'pointer', border: `1px dashed ${slot.file ? colors.accent : colors.border}`, backgroundColor: slot.file ? `${colors.accent}08` : 'white', fontSize: '13px', color: slot.file ? colors.accent : colors.textMuted, fontWeight: slot.file ? '600' : '400' }}>
+                  {slot.file ? (<><Check size={14} /> {slot.file.name}</>) : (<><Upload size={14} /> Choose file (PDF, image, or photo)</>)}
+                  <input type="file" accept="image/*,.pdf" onChange={(e) => { const f = e.target.files?.[0]; if (f) updateSlot(i, { file: f }) }} style={{ display: 'none' }} />
+                </label>
+                {slot.error && <p style={{ fontSize: '12px', color: '#ef4444', margin: '6px 0 0 0' }}>Error: {slot.error}</p>}
+              </>)}
             </div>
           ))}
         </div>
-
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={handleCancel} disabled={uploading} style={{
-            flex: 1, padding: '12px', backgroundColor: colors.bgLight,
-            border: `1px solid ${colors.border}`, borderRadius: '10px',
-            color: colors.textDark, fontSize: '14px', fontWeight: '600',
-            cursor: uploading ? 'default' : 'pointer'
-          }}>
-            Cancel
-          </button>
-          <button onClick={handleUploadAll} disabled={uploading} style={{
-            flex: 2, padding: '12px',
-            backgroundColor: uploading ? '#94a3b8' : colors.accent,
-            border: 'none', borderRadius: '10px', color: 'white',
-            fontSize: '14px', fontWeight: '700',
-            cursor: uploading ? 'default' : 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
-          }}>
-            {uploading ? (
-              <><div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> Uploading...</>
-            ) : (
-              <><Upload size={16} /> Upload All</>
-            )}
+          <button onClick={() => { setAddingDocs(false); setSlots([]); setDocCount(1) }} disabled={uploading} style={{ flex: 1, padding: '12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '10px', color: colors.textDark, fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+          <button onClick={handleUploadAll} disabled={uploading} style={{ flex: 2, padding: '12px', backgroundColor: uploading ? '#94a3b8' : colors.accent, border: 'none', borderRadius: '10px', color: 'white', fontSize: '14px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+            {uploading ? 'Uploading...' : 'Upload All'}
           </button>
         </div>
       </div>
     )
   }
 
-  // Normal view - show existing documents + add button
   return (
     <div>
-      {/* Existing documents */}
       {documents.length > 0 ? (
         <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
           {documents.map((doc, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', gap: '12px',
-              padding: '12px 16px', backgroundColor: colors.bgLight,
-              borderRadius: '10px', border: `1px solid ${colors.border}`
-            }}>
-              <div style={{
-                width: '40px', height: '40px', borderRadius: '8px',
-                backgroundColor: `${colors.urban}15`, display: 'flex',
-                alignItems: 'center', justifyContent: 'center', flexShrink: 0
-              }}>
-                <FileText size={20} color={colors.urban} />
-              </div>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: `${colors.urban}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={20} color={colors.urban} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {doc.name}
-                </p>
-                <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>
-                  {doc.file_type?.toUpperCase() || 'PDF'} • {new Date(doc.uploaded_at).toLocaleDateString()}
-                </p>
+                <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.name}</p>
+                <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{doc.file_type?.toUpperCase() || 'PDF'} • {new Date(doc.uploaded_at).toLocaleDateString()}</p>
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{
-                  width: '34px', height: '34px', borderRadius: '8px',
-                  backgroundColor: `${colors.accent}15`, display: 'flex',
-                  alignItems: 'center', justifyContent: 'center', textDecoration: 'none'
-                }}>
-                  <Eye size={16} color={colors.accent} />
-                </a>
-                <button onClick={() => onDelete(i)} style={{
-                  width: '34px', height: '34px', borderRadius: '8px',
-                  backgroundColor: '#fee2e2', border: 'none', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0
-                }}>
-                  <Trash2 size={16} color="#ef4444" />
-                </button>
+                <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
+                <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
               </div>
             </div>
           ))}
@@ -2083,40 +1805,14 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
           <p style={{ fontSize: '13px', margin: 0 }}>No documents uploaded yet</p>
         </div>
       )}
-
-      {/* How many documents? */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '10px',
-        padding: '12px 16px', backgroundColor: colors.bgLight,
-        borderRadius: '10px', border: `1px solid ${colors.border}`
-      }}>
-        <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: '500', whiteSpace: 'nowrap' }}>
-          Documents to upload:
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+        <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: '500', whiteSpace: 'nowrap' }}>Documents to upload:</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <button onClick={() => setDocCount(Math.max(1, docCount - 1))} style={{
-            width: '32px', height: '32px', borderRadius: '8px',
-            border: `1px solid ${colors.border}`, backgroundColor: 'white',
-            fontSize: '18px', fontWeight: '700', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark
-          }}>−</button>
-          <span style={{
-            width: '36px', textAlign: 'center', fontSize: '16px',
-            fontWeight: '700', color: colors.primary
-          }}>{docCount}</span>
-          <button onClick={() => setDocCount(Math.min(10, docCount + 1))} style={{
-            width: '32px', height: '32px', borderRadius: '8px',
-            border: `1px solid ${colors.border}`, backgroundColor: 'white',
-            fontSize: '18px', fontWeight: '700', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark
-          }}>+</button>
+          <button onClick={() => setDocCount(Math.max(1, docCount - 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark }}>−</button>
+          <span style={{ width: '36px', textAlign: 'center', fontSize: '16px', fontWeight: '700', color: colors.primary }}>{docCount}</span>
+          <button onClick={() => setDocCount(Math.min(10, docCount + 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark }}>+</button>
         </div>
-        <button onClick={handleStart} style={{
-          flex: 1, padding: '10px 16px', backgroundColor: colors.urban,
-          border: 'none', borderRadius: '8px', color: 'white',
-          fontSize: '13px', fontWeight: '700', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
-        }}>
+        <button onClick={handleStart} style={{ flex: 1, padding: '10px 16px', backgroundColor: colors.urban, border: 'none', borderRadius: '8px', color: 'white', fontSize: '13px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
           <Plus size={16} /> Add Documents
         </button>
       </div>
@@ -2177,7 +1873,6 @@ td{padding:6px 10px;border:1px solid #e2e8f0}
 <div class="section-title">Valuation / Tlhahlobo Ea Boleng</div>
 <table>
 <tr><td class="label">Permanent Area (sqm)</td><td>${data.affected_area_perm || '-'}</td><td class="label">Temporary Area (sqm)</td><td>${data.affected_area_temp || '-'}</td></tr>
-<tr><td class="label">Perm. Rate (M/sqm)</td><td>${data.rate_perm || '-'}</td><td class="label">Temp. Rate (M/sqm)</td><td>${data.rate_temp || '-'}</td></tr>
 <tr><td class="label">Disturbance Allowance</td><td>M ${data.disturbance_allowance || '-'}</td><td class="label">Total Compensation</td><td style="font-weight:700;color:#8cc63f">M ${data.total_compensation || '-'}</td></tr>
 </table>
 </div>
