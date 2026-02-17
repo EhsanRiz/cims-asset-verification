@@ -493,7 +493,7 @@ export default function Dashboard() {
       const fileExt = file.name.split('.').pop()
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
       const fileName = `${selectedHousehold.id}_doc_${timestamp}.${fileExt}`
-      const filePath = `documents/${fileName}`
+      const filePath = `photos/${fileName}`
 
       const { error: uploadError } = await supabase.storage
         .from('cims-documents')
