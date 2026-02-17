@@ -486,44 +486,18 @@ export default function Dashboard() {
     }
   }
 
-  // Handle scanned document upload (multiple images → PDF)
-  const handleDocumentScanUpload = async (images, docName) => {
-    if (!images || images.length === 0 || !selectedHousehold) return
+  // Handle document file upload (PDF, image, etc.)
+  const handleDocumentUpload = async (file, docName) => {
+    if (!file || !selectedHousehold) return
     try {
-      // Dynamic import jsPDF
-      const { jsPDF } = await import('jspdf')
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-
-      for (let i = 0; i < images.length; i++) {
-        if (i > 0) pdf.addPage()
-        const img = images[i] // base64 data URL
-        
-        // Calculate dimensions to fit A4 (210 x 297mm) with 10mm margins
-        const pageW = 190, pageH = 277
-        const imgEl = await new Promise((resolve) => {
-          const el = new Image()
-          el.onload = () => resolve(el)
-          el.src = img
-        })
-        
-        let w = imgEl.width, h = imgEl.height
-        const ratio = Math.min(pageW / w, pageH / h)
-        w *= ratio
-        h *= ratio
-        const x = (210 - w) / 2
-        const y = (297 - h) / 2
-
-        pdf.addImage(img, 'JPEG', x, y, w, h)
-      }
-
-      const pdfBlob = pdf.output('blob')
+      const fileExt = file.name.split('.').pop()
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const fileName = `${selectedHousehold.id}_doc_${timestamp}.pdf`
+      const fileName = `${selectedHousehold.id}_doc_${timestamp}.${fileExt}`
       const filePath = `documents/${fileName}`
 
       const { error: uploadError } = await supabase.storage
         .from('cims-documents')
-        .upload(filePath, pdfBlob, { contentType: 'application/pdf', upsert: true })
+        .upload(filePath, file, { upsert: true })
 
       if (uploadError) throw uploadError
 
@@ -534,10 +508,10 @@ export default function Dashboard() {
       // Add to other_documents array
       const existing = selectedHousehold.other_documents || []
       const newDoc = {
-        name: docName || `Scan ${new Date().toLocaleDateString()}`,
+        name: docName || file.name,
         url: publicUrl,
         uploaded_at: new Date().toISOString(),
-        page_count: images.length
+        file_type: fileExt.toLowerCase()
       }
       const updated = [...existing, newDoc]
 
@@ -547,10 +521,10 @@ export default function Dashboard() {
 
       setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
       setEditedData(prev => ({ ...prev, other_documents: updated }))
-      alert(`✅ Document uploaded (${images.length} pages)`)
+      return true
     } catch (err) {
-      console.error('Scan upload error:', err)
-      alert('Error uploading document: ' + err.message)
+      console.error('Upload error:', err)
+      throw err
     }
   }
 
@@ -1187,7 +1161,7 @@ export default function Dashboard() {
               onFieldChange={handleFieldChange}
               onSave={handleSave}
               onPhotoUpload={handlePhotoUpload}
-              onDocumentScan={handleDocumentScanUpload}
+              onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
               onPrint={handlePrint}
               colors={colors}
@@ -1330,7 +1304,7 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentScan, onDeleteDocument, onPrint, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onPrint, colors }) {
   const data = editMode ? editedData : household
 
   return (
@@ -1502,9 +1476,9 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           </Card>
 
           <Card title="Other Documents" icon={FileUp} color={colors.urban} colors={colors}>
-            <DocumentScanner 
+            <DocumentUploader 
               documents={data.other_documents || []} 
-              onScan={onDocumentScan} 
+              onUpload={onDocumentUpload} 
               onDelete={onDeleteDocument}
               colors={colors} 
             />
@@ -1636,199 +1610,162 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
   )
 }
 
-// Document Scanner - captures multiple photos and combines into PDF
-function DocumentScanner({ documents, onScan, onDelete, colors }) {
-  const [scanning, setScanning] = useState(false)
-  const [pages, setPages] = useState([]) // base64 data URLs
+// Document Uploader - asks how many docs, provides upload slots
+function DocumentUploader({ documents, onUpload, onDelete, colors }) {
+  const [addingDocs, setAddingDocs] = useState(false)
+  const [docCount, setDocCount] = useState(1)
+  const [slots, setSlots] = useState([]) // { name: '', file: null, uploading: false, done: false }
   const [uploading, setUploading] = useState(false)
-  const [docName, setDocName] = useState('')
-  const captureRef = useRef(null)
 
-  const handleCapture = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      setPages(prev => [...prev, ev.target.result])
+  const handleStart = () => {
+    const count = Math.max(1, Math.min(10, docCount))
+    setSlots(Array.from({ length: count }, (_, i) => ({
+      name: '', file: null, uploading: false, done: false, error: null
+    })))
+    setAddingDocs(true)
+  }
+
+  const updateSlot = (index, updates) => {
+    setSlots(prev => prev.map((s, i) => i === index ? { ...s, ...updates } : s))
+  }
+
+  const handleUploadAll = async () => {
+    const toUpload = slots.filter(s => s.file && !s.done)
+    if (toUpload.length === 0) {
+      alert('Please select at least one file.')
+      return
     }
-    reader.readAsDataURL(file)
-    // Reset input so same file can be selected again
-    e.target.value = ''
-  }
-
-  const removePage = (index) => {
-    setPages(prev => prev.filter((_, i) => i !== index))
-  }
-
-  const handleDone = async () => {
-    if (pages.length === 0) return
     setUploading(true)
-    try {
-      await onScan(pages, docName || `Scan ${new Date().toLocaleDateString()}`)
-      setPages([])
-      setDocName('')
-      setScanning(false)
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setUploading(false)
+    let successCount = 0
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i]
+      if (!slot.file || slot.done) continue
+      updateSlot(i, { uploading: true })
+      try {
+        await onUpload(slot.file, slot.name || slot.file.name)
+        updateSlot(i, { uploading: false, done: true })
+        successCount++
+      } catch (err) {
+        updateSlot(i, { uploading: false, error: err.message })
+      }
+    }
+    setUploading(false)
+    if (successCount > 0) {
+      alert(`✅ ${successCount} document${successCount > 1 ? 's' : ''} uploaded successfully!`)
+      setAddingDocs(false)
+      setSlots([])
+      setDocCount(1)
     }
   }
 
   const handleCancel = () => {
-    if (pages.length > 0 && !confirm('Discard scanned pages?')) return
-    setPages([])
-    setDocName('')
-    setScanning(false)
+    setAddingDocs(false)
+    setSlots([])
+    setDocCount(1)
   }
 
-  // Scanning mode - full overlay
-  if (scanning) {
+  // Adding documents mode
+  if (addingDocs) {
     return (
-      <div style={{
-        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 9999,
-        display: 'flex', flexDirection: 'column',
-        animation: 'fadeIn 0.2s ease'
-      }}>
-        <style>{`@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
-
-        {/* Header */}
-        <div style={{
-          padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          borderBottom: '1px solid rgba(255,255,255,0.1)', flexShrink: 0
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <ScanLine size={20} color={colors.accent} />
-            <span style={{ color: 'white', fontWeight: '700', fontSize: '16px' }}>Scan Document</span>
-          </div>
-          <span style={{
-            backgroundColor: colors.accent, color: 'white', padding: '4px 12px',
-            borderRadius: '20px', fontSize: '13px', fontWeight: '700'
-          }}>
-            {pages.length} {pages.length === 1 ? 'page' : 'pages'}
-          </span>
-        </div>
-
-        {/* Document name input */}
-        <div style={{ padding: '12px 20px', flexShrink: 0 }}>
-          <input 
-            type="text" 
-            placeholder="Document name (e.g. Lease Agreement, Consent Form...)" 
-            value={docName} 
-            onChange={(e) => setDocName(e.target.value)}
-            style={{
-              width: '100%', padding: '10px 14px', borderRadius: '8px',
-              border: '1px solid rgba(255,255,255,0.2)', backgroundColor: 'rgba(255,255,255,0.1)',
-              color: 'white', fontSize: '14px', outline: 'none', boxSizing: 'border-box'
-            }}
-          />
-        </div>
-
-        {/* Pages grid - scrollable */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '8px 20px' }}>
-          {pages.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'rgba(255,255,255,0.4)' }}>
-              <Camera size={48} style={{ opacity: 0.3 }} />
-              <p style={{ fontSize: '15px', margin: '16px 0 6px 0' }}>No pages captured yet</p>
-              <p style={{ fontSize: '13px' }}>Tap the button below to start scanning</p>
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '12px' }}>
-              {pages.map((page, i) => (
-                <div key={i} style={{
-                  position: 'relative', borderRadius: '10px', overflow: 'hidden',
-                  border: '2px solid rgba(255,255,255,0.15)', aspectRatio: '3/4'
+      <div>
+        <div style={{ display: 'grid', gap: '12px', marginBottom: '16px' }}>
+          {slots.map((slot, i) => (
+            <div key={i} style={{
+              padding: '14px 16px', borderRadius: '10px',
+              border: `1px solid ${slot.done ? colors.accent : slot.error ? '#ef4444' : colors.border}`,
+              backgroundColor: slot.done ? `${colors.accent}08` : slot.error ? '#fef2f2' : colors.bgLight
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                <div style={{
+                  width: '28px', height: '28px', borderRadius: '6px',
+                  backgroundColor: slot.done ? `${colors.accent}20` : `${colors.urban}15`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
                 }}>
-                  <img src={page} alt={`Page ${i + 1}`} style={{
-                    width: '100%', height: '100%', objectFit: 'cover'
-                  }} />
-                  <div style={{
-                    position: 'absolute', top: '6px', left: '6px',
-                    backgroundColor: colors.primary, color: 'white',
-                    padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700'
-                  }}>
-                    {i + 1}
-                  </div>
-                  <button onClick={() => removePage(i)} style={{
-                    position: 'absolute', top: '6px', right: '6px',
-                    backgroundColor: '#ef4444', border: 'none', borderRadius: '50%',
-                    width: '26px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer', padding: 0
-                  }}>
-                    <X size={14} color="white" />
-                  </button>
+                  {slot.done ? <Check size={14} color={colors.accent} /> :
+                   slot.uploading ? <div style={{ width: '14px', height: '14px', border: '2px solid #e5e7eb', borderTopColor: colors.accent, borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> :
+                   <span style={{ fontSize: '12px', fontWeight: '700', color: colors.urban }}>{i + 1}</span>}
                 </div>
-              ))}
+                <span style={{ fontSize: '13px', fontWeight: '600', color: colors.textDark }}>
+                  Document {i + 1}
+                </span>
+                {slot.done && <span style={{ fontSize: '12px', color: colors.accent, fontWeight: '600' }}>✓ Uploaded</span>}
+              </div>
+
+              {!slot.done && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Document name (e.g. Lease Agreement)"
+                    value={slot.name}
+                    onChange={(e) => updateSlot(i, { name: e.target.value })}
+                    style={{
+                      width: '100%', padding: '9px 12px', borderRadius: '8px',
+                      border: `1px solid ${colors.border}`, fontSize: '13px',
+                      outline: 'none', boxSizing: 'border-box', marginBottom: '8px',
+                      backgroundColor: 'white'
+                    }}
+                  />
+                  <label style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                    padding: '10px', borderRadius: '8px', cursor: 'pointer',
+                    border: `1px dashed ${slot.file ? colors.accent : colors.border}`,
+                    backgroundColor: slot.file ? `${colors.accent}08` : 'white',
+                    fontSize: '13px', color: slot.file ? colors.accent : colors.textMuted,
+                    fontWeight: slot.file ? '600' : '400'
+                  }}>
+                    {slot.file ? (
+                      <><Check size={14} /> {slot.file.name}</>
+                    ) : (
+                      <><Upload size={14} /> Choose file (PDF, image, or photo)</>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0]
+                        if (f) updateSlot(i, { file: f })
+                      }}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  {slot.error && (
+                    <p style={{ fontSize: '12px', color: '#ef4444', margin: '6px 0 0 0' }}>Error: {slot.error}</p>
+                  )}
+                </>
+              )}
             </div>
-          )}
+          ))}
         </div>
 
-        {/* Bottom action bar */}
-        <div style={{
-          padding: '16px 20px', display: 'flex', gap: '12px',
-          borderTop: '1px solid rgba(255,255,255,0.1)', flexShrink: 0,
-          backgroundColor: 'rgba(0,0,0,0.3)'
-        }}>
-          <button onClick={handleCancel} style={{
-            flex: 1, padding: '14px', backgroundColor: 'rgba(255,255,255,0.1)',
-            border: '1px solid rgba(255,255,255,0.2)', borderRadius: '10px',
-            color: 'white', fontSize: '14px', fontWeight: '600', cursor: 'pointer'
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={handleCancel} disabled={uploading} style={{
+            flex: 1, padding: '12px', backgroundColor: colors.bgLight,
+            border: `1px solid ${colors.border}`, borderRadius: '10px',
+            color: colors.textDark, fontSize: '14px', fontWeight: '600',
+            cursor: uploading ? 'default' : 'pointer'
           }}>
             Cancel
           </button>
-
-          <button onClick={() => captureRef.current?.click()} style={{
-            flex: 2, padding: '14px', backgroundColor: colors.accent,
+          <button onClick={handleUploadAll} disabled={uploading} style={{
+            flex: 2, padding: '12px',
+            backgroundColor: uploading ? '#94a3b8' : colors.accent,
             border: 'none', borderRadius: '10px', color: 'white',
-            fontSize: '14px', fontWeight: '700', cursor: 'pointer',
+            fontSize: '14px', fontWeight: '700',
+            cursor: uploading ? 'default' : 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
           }}>
-            <Camera size={18} />
-            {pages.length === 0 ? 'Take Photo' : 'Add Page'}
+            {uploading ? (
+              <><div style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 1s linear infinite' }} /> Uploading...</>
+            ) : (
+              <><Upload size={16} /> Upload All</>
+            )}
           </button>
-
-          {pages.length > 0 && (
-            <button onClick={handleDone} disabled={uploading} style={{
-              flex: 1.5, padding: '14px',
-              backgroundColor: uploading ? '#94a3b8' : colors.primary,
-              border: 'none', borderRadius: '10px', color: 'white',
-              fontSize: '14px', fontWeight: '700', cursor: uploading ? 'default' : 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
-            }}>
-              {uploading ? (
-                <>
-                  <div style={{
-                    width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)',
-                    borderTopColor: 'white', borderRadius: '50%',
-                    animation: 'spin 1s linear infinite'
-                  }} />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Check size={18} />
-                  Done
-                </>
-              )}
-            </button>
-          )}
         </div>
-
-        {/* Hidden camera input */}
-        <input 
-          ref={captureRef} 
-          type="file" 
-          accept="image/*" 
-          capture="environment"
-          onChange={handleCapture} 
-          style={{ display: 'none' }} 
-        />
       </div>
     )
   }
 
-  // Normal view - show existing documents + scan button
+  // Normal view - show existing documents + add button
   return (
     <div>
       {/* Existing documents */}
@@ -1852,7 +1789,7 @@ function DocumentScanner({ documents, onScan, onDelete, colors }) {
                   {doc.name}
                 </p>
                 <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>
-                  {doc.page_count} {doc.page_count === 1 ? 'page' : 'pages'} • {new Date(doc.uploaded_at).toLocaleDateString()}
+                  {doc.file_type?.toUpperCase() || 'PDF'} • {new Date(doc.uploaded_at).toLocaleDateString()}
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
@@ -1877,20 +1814,46 @@ function DocumentScanner({ documents, onScan, onDelete, colors }) {
       ) : (
         <div style={{ textAlign: 'center', padding: '24px', color: colors.textLight, marginBottom: '16px' }}>
           <FileUp size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
-          <p style={{ fontSize: '13px', margin: 0 }}>No documents scanned yet</p>
+          <p style={{ fontSize: '13px', margin: 0 }}>No documents uploaded yet</p>
         </div>
       )}
 
-      {/* Scan button */}
-      <button onClick={() => setScanning(true)} style={{
-        width: '100%', padding: '14px', backgroundColor: `${colors.urban}10`,
-        border: `2px dashed ${colors.urban}`, borderRadius: '10px',
-        color: colors.urban, fontSize: '14px', fontWeight: '600',
-        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+      {/* How many documents? */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '10px',
+        padding: '12px 16px', backgroundColor: colors.bgLight,
+        borderRadius: '10px', border: `1px solid ${colors.border}`
       }}>
-        <ScanLine size={18} />
-        Scan New Document
-      </button>
+        <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: '500', whiteSpace: 'nowrap' }}>
+          Documents to upload:
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button onClick={() => setDocCount(Math.max(1, docCount - 1))} style={{
+            width: '32px', height: '32px', borderRadius: '8px',
+            border: `1px solid ${colors.border}`, backgroundColor: 'white',
+            fontSize: '18px', fontWeight: '700', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark
+          }}>−</button>
+          <span style={{
+            width: '36px', textAlign: 'center', fontSize: '16px',
+            fontWeight: '700', color: colors.primary
+          }}>{docCount}</span>
+          <button onClick={() => setDocCount(Math.min(10, docCount + 1))} style={{
+            width: '32px', height: '32px', borderRadius: '8px',
+            border: `1px solid ${colors.border}`, backgroundColor: 'white',
+            fontSize: '18px', fontWeight: '700', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark
+          }}>+</button>
+        </div>
+        <button onClick={handleStart} style={{
+          flex: 1, padding: '10px 16px', backgroundColor: colors.urban,
+          border: 'none', borderRadius: '8px', color: 'white',
+          fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+        }}>
+          <Plus size={16} /> Add Documents
+        </button>
+      </div>
     </div>
   )
 }
