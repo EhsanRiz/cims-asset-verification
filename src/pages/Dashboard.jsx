@@ -292,7 +292,9 @@ export default function Dashboard() {
         'household_head_first_name', 'household_head_surname', 'gender',
         'id_number', 'cellphone_no', 'file_number', 'occupation_of_pap',
         'community_council', 'photograph_of_pap_url', 'id_document_url',
-        'asset_photo_url', 'map_url', 'verification_status'
+        'asset_photo_url', 'map_url', 'verification_status',
+        'affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp',
+        'disturbance_allowance', 'total_compensation'
       ]
       
       editableFields.forEach(field => {
@@ -322,6 +324,12 @@ export default function Dashboard() {
             asset_photo_url: editedData.asset_photo_url,
             map_url: editedData.map_url,
             verification_status: editedData.verification_status,
+            affected_area_perm: editedData.affected_area_perm || null,
+            affected_area_temp: editedData.affected_area_temp || null,
+            rate_perm: editedData.rate_perm || null,
+            rate_temp: editedData.rate_temp || null,
+            disturbance_allowance: editedData.disturbance_allowance || null,
+            total_compensation: editedData.total_compensation || null,
             last_edited_by: user?.id,
             last_edited_by_name: user?.full_name,
             last_edited_at: new Date().toISOString(),
@@ -490,7 +498,9 @@ export default function Dashboard() {
       'ID Number': h.id_number || '',
       'Phone': h.cellphone_no || '',
       'Permanent Area (sqm)': h.affected_area_perm || '',
+      'Perm. Rate (M/sqm)': h.rate_perm || '',
       'Temporary Area (sqm)': h.affected_area_temp || '',
+      'Temp. Rate (M/sqm)': h.rate_temp || '',
       'Disturbance Allowance (M)': h.disturbance_allowance || '',
       'Total Compensation (M)': h.total_compensation || '',
       'Latitude': h.latitude || '',
@@ -1371,12 +1381,12 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Affected Area & Compensation" icon={Home} color={colors.primary} colors={colors}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} colors={colors} />
-              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} colors={colors} />
-              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} colors={colors} />
-              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} colors={colors} />
-              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} colors={colors} />
-              <Field label="Total Compensation (M)" value={data.total_compensation} highlight colors={colors} />
+              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Total Compensation (M)" value={data.total_compensation} field="total_compensation" editMode={editMode} onChange={onFieldChange} highlight colors={colors} />
             </div>
           </Card>
 
@@ -1576,6 +1586,7 @@ td{padding:6px 10px;border:1px solid #e2e8f0}
 <div class="section-title">Valuation / Tlhahlobo Ea Boleng</div>
 <table>
 <tr><td class="label">Permanent Area (sqm)</td><td>${data.affected_area_perm || '-'}</td><td class="label">Temporary Area (sqm)</td><td>${data.affected_area_temp || '-'}</td></tr>
+<tr><td class="label">Perm. Rate (M/sqm)</td><td>${data.rate_perm || '-'}</td><td class="label">Temp. Rate (M/sqm)</td><td>${data.rate_temp || '-'}</td></tr>
 <tr><td class="label">Disturbance Allowance</td><td>M ${data.disturbance_allowance || '-'}</td><td class="label">Total Compensation</td><td style="font-weight:700;color:#8cc63f">M ${data.total_compensation || '-'}</td></tr>
 </table>
 </div>
