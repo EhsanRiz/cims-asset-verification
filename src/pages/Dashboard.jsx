@@ -5,7 +5,8 @@ import {
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
-  Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle
+  Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle,
+  Plus, Trash2, Eye, ScanLine, FileUp
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -482,6 +483,95 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Upload error:', err)
       alert('Upload error: ' + err.message)
+    }
+  }
+
+  // Handle scanned document upload (multiple images → PDF)
+  const handleDocumentScanUpload = async (images, docName) => {
+    if (!images || images.length === 0 || !selectedHousehold) return
+    try {
+      // Dynamic import jsPDF
+      const { jsPDF } = await import('jspdf')
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+
+      for (let i = 0; i < images.length; i++) {
+        if (i > 0) pdf.addPage()
+        const img = images[i] // base64 data URL
+        
+        // Calculate dimensions to fit A4 (210 x 297mm) with 10mm margins
+        const pageW = 190, pageH = 277
+        const imgEl = await new Promise((resolve) => {
+          const el = new Image()
+          el.onload = () => resolve(el)
+          el.src = img
+        })
+        
+        let w = imgEl.width, h = imgEl.height
+        const ratio = Math.min(pageW / w, pageH / h)
+        w *= ratio
+        h *= ratio
+        const x = (210 - w) / 2
+        const y = (297 - h) / 2
+
+        pdf.addImage(img, 'JPEG', x, y, w, h)
+      }
+
+      const pdfBlob = pdf.output('blob')
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const fileName = `${selectedHousehold.id}_doc_${timestamp}.pdf`
+      const filePath = `documents/${fileName}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('cims-documents')
+        .upload(filePath, pdfBlob, { contentType: 'application/pdf', upsert: true })
+
+      if (uploadError) throw uploadError
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('cims-documents')
+        .getPublicUrl(filePath)
+
+      // Add to other_documents array
+      const existing = selectedHousehold.other_documents || []
+      const newDoc = {
+        name: docName || `Scan ${new Date().toLocaleDateString()}`,
+        url: publicUrl,
+        uploaded_at: new Date().toISOString(),
+        page_count: images.length
+      }
+      const updated = [...existing, newDoc]
+
+      await supabase.from('households')
+        .update({ other_documents: updated })
+        .eq('id', selectedHousehold.id)
+
+      setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
+      setEditedData(prev => ({ ...prev, other_documents: updated }))
+      alert(`✅ Document uploaded (${images.length} pages)`)
+    } catch (err) {
+      console.error('Scan upload error:', err)
+      alert('Error uploading document: ' + err.message)
+    }
+  }
+
+  // Delete a scanned document
+  const handleDeleteDocument = async (index) => {
+    if (!selectedHousehold) return
+    if (!confirm('Delete this document?')) return
+    try {
+      const existing = selectedHousehold.other_documents || []
+      const updated = existing.filter((_, i) => i !== index)
+
+      await supabase.from('households')
+        .update({ other_documents: updated })
+        .eq('id', selectedHousehold.id)
+
+      setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
+      setEditedData(prev => ({ ...prev, other_documents: updated }))
+      alert('Document deleted.')
+    } catch (err) {
+      console.error('Delete error:', err)
+      alert('Error: ' + err.message)
     }
   }
 
@@ -1097,6 +1187,8 @@ export default function Dashboard() {
               onFieldChange={handleFieldChange}
               onSave={handleSave}
               onPhotoUpload={handlePhotoUpload}
+              onDocumentScan={handleDocumentScanUpload}
+              onDeleteDocument={handleDeleteDocument}
               onPrint={handlePrint}
               colors={colors}
             />
@@ -1238,7 +1330,7 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onPrint, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentScan, onDeleteDocument, onPrint, colors }) {
   const data = editMode ? editedData : household
 
   return (
@@ -1399,14 +1491,25 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
       )}
 
       {activeTab === 'documents' && (
-        <Card title="Documents & Photos" icon={Camera} color={colors.primary} colors={colors}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-            <PhotoFrame label="PAP Photo" field="photograph_of_pap_url" url={data.photograph_of_pap_url} onUpload={onPhotoUpload} colors={colors} />
-            <PhotoFrame label="ID Document" field="id_document_url" url={data.id_document_url} onUpload={onPhotoUpload} colors={colors} />
-            <PhotoFrame label="Asset Photo" field="asset_photo_url" url={data.asset_photo_url} onUpload={onPhotoUpload} colors={colors} />
-            <PhotoFrame label="Location Map" field="map_url" url={data.map_url} onUpload={onPhotoUpload} colors={colors} />
-          </div>
-        </Card>
+        <div style={{ display: 'grid', gap: '20px' }}>
+          <Card title="Photos" icon={Camera} color={colors.primary} colors={colors}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+              <PhotoFrame label="PAP Photo" field="photograph_of_pap_url" url={data.photograph_of_pap_url} onUpload={onPhotoUpload} colors={colors} />
+              <PhotoFrame label="ID Document" field="id_document_url" url={data.id_document_url} onUpload={onPhotoUpload} colors={colors} />
+              <PhotoFrame label="Asset Photo" field="asset_photo_url" url={data.asset_photo_url} onUpload={onPhotoUpload} colors={colors} />
+              <PhotoFrame label="Location Map" field="map_url" url={data.map_url} onUpload={onPhotoUpload} colors={colors} />
+            </div>
+          </Card>
+
+          <Card title="Other Documents" icon={FileUp} color={colors.urban} colors={colors}>
+            <DocumentScanner 
+              documents={data.other_documents || []} 
+              onScan={onDocumentScan} 
+              onDelete={onDeleteDocument}
+              colors={colors} 
+            />
+          </Card>
+        </div>
       )}
     </div>
   )
@@ -1529,6 +1632,265 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// Document Scanner - captures multiple photos and combines into PDF
+function DocumentScanner({ documents, onScan, onDelete, colors }) {
+  const [scanning, setScanning] = useState(false)
+  const [pages, setPages] = useState([]) // base64 data URLs
+  const [uploading, setUploading] = useState(false)
+  const [docName, setDocName] = useState('')
+  const captureRef = useRef(null)
+
+  const handleCapture = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      setPages(prev => [...prev, ev.target.result])
+    }
+    reader.readAsDataURL(file)
+    // Reset input so same file can be selected again
+    e.target.value = ''
+  }
+
+  const removePage = (index) => {
+    setPages(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const handleDone = async () => {
+    if (pages.length === 0) return
+    setUploading(true)
+    try {
+      await onScan(pages, docName || `Scan ${new Date().toLocaleDateString()}`)
+      setPages([])
+      setDocName('')
+      setScanning(false)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleCancel = () => {
+    if (pages.length > 0 && !confirm('Discard scanned pages?')) return
+    setPages([])
+    setDocName('')
+    setScanning(false)
+  }
+
+  // Scanning mode - full overlay
+  if (scanning) {
+    return (
+      <div style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 9999,
+        display: 'flex', flexDirection: 'column',
+        animation: 'fadeIn 0.2s ease'
+      }}>
+        <style>{`@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
+
+        {/* Header */}
+        <div style={{
+          padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          borderBottom: '1px solid rgba(255,255,255,0.1)', flexShrink: 0
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <ScanLine size={20} color={colors.accent} />
+            <span style={{ color: 'white', fontWeight: '700', fontSize: '16px' }}>Scan Document</span>
+          </div>
+          <span style={{
+            backgroundColor: colors.accent, color: 'white', padding: '4px 12px',
+            borderRadius: '20px', fontSize: '13px', fontWeight: '700'
+          }}>
+            {pages.length} {pages.length === 1 ? 'page' : 'pages'}
+          </span>
+        </div>
+
+        {/* Document name input */}
+        <div style={{ padding: '12px 20px', flexShrink: 0 }}>
+          <input 
+            type="text" 
+            placeholder="Document name (e.g. Lease Agreement, Consent Form...)" 
+            value={docName} 
+            onChange={(e) => setDocName(e.target.value)}
+            style={{
+              width: '100%', padding: '10px 14px', borderRadius: '8px',
+              border: '1px solid rgba(255,255,255,0.2)', backgroundColor: 'rgba(255,255,255,0.1)',
+              color: 'white', fontSize: '14px', outline: 'none', boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        {/* Pages grid - scrollable */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '8px 20px' }}>
+          {pages.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'rgba(255,255,255,0.4)' }}>
+              <Camera size={48} style={{ opacity: 0.3 }} />
+              <p style={{ fontSize: '15px', margin: '16px 0 6px 0' }}>No pages captured yet</p>
+              <p style={{ fontSize: '13px' }}>Tap the button below to start scanning</p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '12px' }}>
+              {pages.map((page, i) => (
+                <div key={i} style={{
+                  position: 'relative', borderRadius: '10px', overflow: 'hidden',
+                  border: '2px solid rgba(255,255,255,0.15)', aspectRatio: '3/4'
+                }}>
+                  <img src={page} alt={`Page ${i + 1}`} style={{
+                    width: '100%', height: '100%', objectFit: 'cover'
+                  }} />
+                  <div style={{
+                    position: 'absolute', top: '6px', left: '6px',
+                    backgroundColor: colors.primary, color: 'white',
+                    padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '700'
+                  }}>
+                    {i + 1}
+                  </div>
+                  <button onClick={() => removePage(i)} style={{
+                    position: 'absolute', top: '6px', right: '6px',
+                    backgroundColor: '#ef4444', border: 'none', borderRadius: '50%',
+                    width: '26px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', padding: 0
+                  }}>
+                    <X size={14} color="white" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Bottom action bar */}
+        <div style={{
+          padding: '16px 20px', display: 'flex', gap: '12px',
+          borderTop: '1px solid rgba(255,255,255,0.1)', flexShrink: 0,
+          backgroundColor: 'rgba(0,0,0,0.3)'
+        }}>
+          <button onClick={handleCancel} style={{
+            flex: 1, padding: '14px', backgroundColor: 'rgba(255,255,255,0.1)',
+            border: '1px solid rgba(255,255,255,0.2)', borderRadius: '10px',
+            color: 'white', fontSize: '14px', fontWeight: '600', cursor: 'pointer'
+          }}>
+            Cancel
+          </button>
+
+          <button onClick={() => captureRef.current?.click()} style={{
+            flex: 2, padding: '14px', backgroundColor: colors.accent,
+            border: 'none', borderRadius: '10px', color: 'white',
+            fontSize: '14px', fontWeight: '700', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+          }}>
+            <Camera size={18} />
+            {pages.length === 0 ? 'Take Photo' : 'Add Page'}
+          </button>
+
+          {pages.length > 0 && (
+            <button onClick={handleDone} disabled={uploading} style={{
+              flex: 1.5, padding: '14px',
+              backgroundColor: uploading ? '#94a3b8' : colors.primary,
+              border: 'none', borderRadius: '10px', color: 'white',
+              fontSize: '14px', fontWeight: '700', cursor: uploading ? 'default' : 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+            }}>
+              {uploading ? (
+                <>
+                  <div style={{
+                    width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)',
+                    borderTopColor: 'white', borderRadius: '50%',
+                    animation: 'spin 1s linear infinite'
+                  }} />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Check size={18} />
+                  Done
+                </>
+              )}
+            </button>
+          )}
+        </div>
+
+        {/* Hidden camera input */}
+        <input 
+          ref={captureRef} 
+          type="file" 
+          accept="image/*" 
+          capture="environment"
+          onChange={handleCapture} 
+          style={{ display: 'none' }} 
+        />
+      </div>
+    )
+  }
+
+  // Normal view - show existing documents + scan button
+  return (
+    <div>
+      {/* Existing documents */}
+      {documents.length > 0 ? (
+        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
+          {documents.map((doc, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: '12px',
+              padding: '12px 16px', backgroundColor: colors.bgLight,
+              borderRadius: '10px', border: `1px solid ${colors.border}`
+            }}>
+              <div style={{
+                width: '40px', height: '40px', borderRadius: '8px',
+                backgroundColor: `${colors.urban}15`, display: 'flex',
+                alignItems: 'center', justifyContent: 'center', flexShrink: 0
+              }}>
+                <FileText size={20} color={colors.urban} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {doc.name}
+                </p>
+                <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>
+                  {doc.page_count} {doc.page_count === 1 ? 'page' : 'pages'} • {new Date(doc.uploaded_at).toLocaleDateString()}
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{
+                  width: '34px', height: '34px', borderRadius: '8px',
+                  backgroundColor: `${colors.accent}15`, display: 'flex',
+                  alignItems: 'center', justifyContent: 'center', textDecoration: 'none'
+                }}>
+                  <Eye size={16} color={colors.accent} />
+                </a>
+                <button onClick={() => onDelete(i)} style={{
+                  width: '34px', height: '34px', borderRadius: '8px',
+                  backgroundColor: '#fee2e2', border: 'none', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0
+                }}>
+                  <Trash2 size={16} color="#ef4444" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ textAlign: 'center', padding: '24px', color: colors.textLight, marginBottom: '16px' }}>
+          <FileUp size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
+          <p style={{ fontSize: '13px', margin: 0 }}>No documents scanned yet</p>
+        </div>
+      )}
+
+      {/* Scan button */}
+      <button onClick={() => setScanning(true)} style={{
+        width: '100%', padding: '14px', backgroundColor: `${colors.urban}10`,
+        border: `2px dashed ${colors.urban}`, borderRadius: '10px',
+        color: colors.urban, fontSize: '14px', fontWeight: '600',
+        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+      }}>
+        <ScanLine size={18} />
+        Scan New Document
+      </button>
     </div>
   )
 }
