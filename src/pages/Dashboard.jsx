@@ -6,7 +6,7 @@ import {
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
   Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle,
-  Plus, Trash2, Eye, ScanLine, FileUp
+  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -310,7 +310,10 @@ export default function Dashboard() {
         'household_head_first_name', 'household_head_surname', 'gender',
         'id_number', 'cellphone_no', 'file_number', 'occupation_of_pap',
         'community_council', 'photograph_of_pap_url', 'id_document_url',
-        'asset_photo_url', 'map_url', 'verification_status'
+        'asset_photo_url', 'map_url', 'verification_status',
+        'route_name', 'route_type', 'land_use', 'gps_coordinates', 'latitude', 'longitude',
+        'affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp',
+        'disturbance_allowance', 'total_compensation'
       ]
       
       editableFields.forEach(field => {
@@ -329,7 +332,7 @@ export default function Dashboard() {
           .update({
             household_head_first_name: editedData.household_head_first_name,
             household_head_surname: editedData.household_head_surname,
-            gender: editedData.gender,
+            gender: editedData.gender || null,
             id_number: editedData.id_number,
             cellphone_no: editedData.cellphone_no,
             file_number: editedData.file_number,
@@ -340,6 +343,18 @@ export default function Dashboard() {
             asset_photo_url: editedData.asset_photo_url,
             map_url: editedData.map_url,
             verification_status: editedData.verification_status,
+            route_name: editedData.route_name,
+            route_type: editedData.route_type,
+            land_use: editedData.land_use || null,
+            gps_coordinates: editedData.gps_coordinates || null,
+            latitude: editedData.latitude || null,
+            longitude: editedData.longitude || null,
+            affected_area_perm: editedData.affected_area_perm || null,
+            affected_area_temp: editedData.affected_area_temp || null,
+            rate_perm: editedData.rate_perm || null,
+            rate_temp: editedData.rate_temp || null,
+            disturbance_allowance: editedData.disturbance_allowance || null,
+            total_compensation: editedData.total_compensation || null,
             last_edited_by: user?.id,
             last_edited_by_name: user?.full_name,
             last_edited_at: new Date().toISOString(),
@@ -409,6 +424,18 @@ export default function Dashboard() {
   const handleApproval = async (request, approved) => {
     try {
       if (approved) {
+        // Check if this is a delete request
+        if (request.changes?._action?.new === 'delete') {
+          await supabase.from('households').delete().eq('id', request.household_id)
+          await supabase.from('edit_requests').update({ status: 'approved', reviewed_by: user?.id, reviewed_by_name: user?.full_name, reviewed_at: new Date().toISOString() }).eq('id', request.id)
+          await supabase.from('notifications').insert({ user_id: request.requested_by, type: 'approval', title: 'Delete Approved ✅', message: `Your delete request for ${request.households?.household_head_first_name} ${request.households?.household_head_surname} was approved by ${user?.full_name}`, reference_type: 'edit_request', reference_id: request.id })
+          await loadData()
+          await loadNotifications()
+          setSelectedHousehold(null)
+          alert('✅ PAP deleted.')
+          return
+        }
+
         // Apply the changes to household
         const updates = {}
         Object.keys(request.changes).forEach(field => {
@@ -541,6 +568,49 @@ export default function Dashboard() {
     }
   }
 
+  // Delete PAP
+  const handleDeletePAP = async (pap) => {
+    if (canApprove) {
+      if (!confirm(`⚠️ Permanently delete ${pap.household_head_first_name} ${pap.household_head_surname}?\n\nThis cannot be undone.`)) return
+      try {
+        await supabase.from('households').delete().eq('id', pap.id)
+        await loadData()
+        setSelectedHousehold(null)
+        setView('paps')
+        alert('🗑️ PAP deleted.')
+      } catch (err) {
+        console.error('Delete error:', err)
+        alert('Error: ' + err.message)
+      }
+    } else {
+      if (!confirm(`Request to delete ${pap.household_head_first_name} ${pap.household_head_surname}?\n\nThis will be sent for approval.`)) return
+      try {
+        await supabase.from('edit_requests').insert({
+          household_id: pap.id,
+          requested_by: user?.id,
+          requested_by_name: user?.full_name,
+          changes: { _action: { old: 'active', new: 'delete' } },
+          status: 'pending'
+        })
+        await supabase.from('notifications').insert({
+          user_role: 'Admin',
+          type: 'edit_request',
+          title: '🗑️ Delete Request',
+          message: `${user?.full_name} requested to delete ${pap.household_head_first_name} ${pap.household_head_surname}`,
+          reference_type: 'household',
+          reference_id: pap.id
+        })
+        await supabase.from('households').update({ pending_approval: true }).eq('id', pap.id)
+        await loadData()
+        await loadNotifications()
+        alert('📤 Delete request submitted for approval.')
+      } catch (err) {
+        console.error('Error:', err)
+        alert('Error: ' + err.message)
+      }
+    }
+  }
+
   // Start adding a new PAP
   const handleStartAddPAP = () => {
     setNewPAPData({
@@ -563,6 +633,8 @@ export default function Dashboard() {
     setSavingNewPAP(true)
     try {
       const record = { ...newPAPData }
+      // Convert empty strings to null (avoid check constraint violations)
+      Object.keys(record).forEach(k => { if (record[k] === '') record[k] = null })
       const numericFields = ['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp', 'disturbance_allowance', 'total_compensation', 'latitude', 'longitude']
       numericFields.forEach(f => { record[f] = record[f] === '' || record[f] == null ? null : (parseFloat(record[f]) || null) })
 
@@ -812,7 +884,7 @@ export default function Dashboard() {
                             {req.households?.household_head_first_name} {req.households?.household_head_surname}
                           </p>
                           <p style={{ margin: '4px 0 8px 0', fontSize: '12px', color: colors.textMuted }}>
-                            Edited by {req.requested_by_name} • {req.households?.route_name}
+                            {req.changes?._action?.new === 'delete' ? '🗑️ DELETE REQUEST' : 'Edited'} by {req.requested_by_name} • {req.households?.route_name}
                           </p>
                           {req.changes && Object.keys(req.changes).length > 0 && (
                             <div style={{ backgroundColor: colors.bgCard, borderRadius: '8px', padding: '8px 10px', marginBottom: '10px', border: `1px solid ${colors.border}`, fontSize: '12px' }}>
@@ -1212,8 +1284,10 @@ export default function Dashboard() {
               onFieldChange={handleFieldChange}
               onSave={handleSave}
               onPhotoUpload={handlePhotoUpload}
+              routes={routes}
               onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
+              onDeletePAP={handleDeletePAP}
               onPrint={handlePrint}
               colors={colors}
             />
@@ -1238,7 +1312,7 @@ export default function Dashboard() {
                   <Field label="File Number" value={newPAPData.file_number} field="file_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
-                  <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} options={['Male', 'Female']} />
                   <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                 </div>
@@ -1411,7 +1485,7 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onPrint, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onDeletePAP, onPrint, routes, colors }) {
   const data = editMode ? editedData : household
 
   return (
@@ -1484,6 +1558,16 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           }}>
             <Printer size={16} /> Print
           </button>
+          {!editMode && (
+            <button onClick={() => onDeletePAP(household)} style={{ 
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
+              backgroundColor: colors.error, color: 'white', 
+              border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(239, 68, 68, 0.3)'
+            }}>
+              <Trash2 size={16} /> {isAdmin ? 'Delete' : 'Request Delete'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1521,18 +1605,18 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               <Field label="File Number" value={data.file_number} field="file_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="ID Number" value={data.id_number} field="id_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Phone" value={data.cellphone_no} field="cellphone_no" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Gender" value={data.gender} field="gender" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Gender" value={data.gender} field="gender" editMode={editMode} onChange={onFieldChange} colors={colors} options={['Male', 'Female']} />
             </div>
           </Card>
 
           <Card title="Location" icon={MapPin} color={colors.accent} colors={colors}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-              <Field label="Route" value={data.route_name} colors={colors} />
+              <Field label="Route" value={data.route_name} field="route_name" editMode={editMode} onChange={(f, v) => { onFieldChange(f, v); const r = routes.find(rt => rt.name === v); if (r) onFieldChange('route_type', r.type) }} colors={colors} options={routes.map(r => ({ value: r.name, label: `${r.name} (${r.type})` }))} />
               <Field label="Route Type" value={data.route_type} colors={colors} />
-              <Field label="Land Use" value={data.land_use} colors={colors} />
-              <Field label="GPS Coordinates" value={data.gps_coordinates} colors={colors} />
-              <Field label="Latitude" value={data.latitude} colors={colors} />
-              <Field label="Longitude" value={data.longitude} colors={colors} />
+              <Field label="Land Use" value={data.land_use} field="land_use" editMode={editMode} onChange={onFieldChange} colors={colors} options={['Res', 'Agric', 'Com', 'Mixed']} />
+              <Field label="GPS Coordinates" value={data.gps_coordinates} field="gps_coordinates" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Latitude" value={data.latitude} field="latitude" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Longitude" value={data.longitude} field="longitude" editMode={editMode} onChange={onFieldChange} colors={colors} />
             </div>
           </Card>
 
@@ -1554,12 +1638,12 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Affected Area & Compensation" icon={Home} color={colors.primary} colors={colors}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} colors={colors} />
-              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} colors={colors} />
-              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} colors={colors} />
-              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} colors={colors} />
-              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} colors={colors} />
-              <Field label="Total Compensation (M)" value={data.total_compensation} highlight colors={colors} />
+              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Total Compensation (M)" value={data.total_compensation} field="total_compensation" editMode={editMode} onChange={onFieldChange} highlight colors={colors} />
             </div>
           </Card>
 
@@ -1615,27 +1699,29 @@ function Card({ title, icon: Icon, color, colors, children }) {
 }
 
 // Field component
-function Field({ label, value, field, editMode, onChange, highlight, colors }) {
+function Field({ label, value, field, editMode, onChange, highlight, colors, options }) {
   const displayValue = value !== null && value !== undefined ? String(value) : ''
   
   return (
     <div>
       <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>{label}</p>
       {editMode && onChange ? (
-        <input type="text" value={displayValue} onChange={(e) => onChange(field, e.target.value)} 
-          style={{ 
-            width: '100%', padding: '10px 14px', 
-            border: `2px solid ${colors.accent}`, borderRadius: '8px', 
-            fontSize: '14px', outline: 'none', boxSizing: 'border-box', 
-            backgroundColor: `${colors.accent}10`,
-            transition: 'all 0.2s'
-          }} />
+        options ? (
+          <select value={displayValue} onChange={(e) => onChange(field, e.target.value)}
+            style={{ width: '100%', padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10`, transition: 'all 0.2s', cursor: 'pointer' }}>
+            <option value="">— Select —</option>
+            {options.map(opt => {
+              const val = typeof opt === 'object' ? opt.value : opt
+              const lbl = typeof opt === 'object' ? opt.label : opt
+              return <option key={val} value={val}>{lbl}</option>
+            })}
+          </select>
+        ) : (
+          <input type="text" value={displayValue} onChange={(e) => onChange(field, e.target.value)} 
+            style={{ width: '100%', padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10`, transition: 'all 0.2s' }} />
+        )
       ) : (
-        <p style={{ 
-          fontSize: '14px', fontWeight: highlight ? '700' : '600', 
-          color: displayValue ? (highlight ? colors.accent : colors.textDark) : colors.textLight, 
-          margin: 0 
-        }}>
+        <p style={{ fontSize: '14px', fontWeight: highlight ? '700' : '600', color: displayValue ? (highlight ? colors.accent : colors.textDark) : colors.textLight, margin: 0 }}>
           {displayValue || 'N/A'}
         </p>
       )}
