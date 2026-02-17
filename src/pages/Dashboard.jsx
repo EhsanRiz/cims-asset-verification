@@ -71,18 +71,54 @@ export default function Dashboard() {
   useEffect(() => {
     loadData()
     loadNotifications()
+
+    // Real-time subscriptions — auto-refresh across all devices
+    const householdsChannel = supabase
+      .channel('households-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, () => {
+        loadData()
+      })
+      .subscribe()
+
+    const editRequestsChannel = supabase
+      .channel('edit-requests-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'edit_requests' }, () => {
+        loadNotifications()
+      })
+      .subscribe()
+
+    const notificationsChannel = supabase
+      .channel('notifications-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
+        loadNotifications()
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(householdsChannel)
+      supabase.removeChannel(editRequestsChannel)
+      supabase.removeChannel(notificationsChannel)
+    }
   }, [])
 
   // Load notifications and pending approvals
   const loadNotifications = async () => {
     try {
       // Load notifications for current user
-      const { data: notifData } = await supabase
+      let notifQuery = supabase
         .from('notifications')
         .select('*')
-        .or(`user_id.eq.${user?.id},user_role.eq.${user?.role}`)
         .order('created_at', { ascending: false })
         .limit(20)
+
+      if (canApprove) {
+        // Approvers see their own notifications + all approver notifications
+        notifQuery = notifQuery.or(`user_id.eq.${user?.id},user_role.eq.${user?.role},user_role.eq.Admin,user_role.eq.approver`)
+      } else {
+        notifQuery = notifQuery.or(`user_id.eq.${user?.id},user_role.eq.${user?.role}`)
+      }
+
+      const { data: notifData } = await notifQuery
       
       if (notifData) {
         setNotifications(notifData)
@@ -785,6 +821,35 @@ export default function Dashboard() {
                           <p style={{ margin: '4px 0 8px 0', fontSize: '12px', color: colors.textMuted }}>
                             Edited by {req.requested_by_name} • {req.households?.route_name}
                           </p>
+
+                          {/* Show what changed */}
+                          {req.changes && Object.keys(req.changes).length > 0 && (
+                            <div style={{ 
+                              backgroundColor: colors.bgCard, borderRadius: '8px', 
+                              padding: '8px 10px', marginBottom: '10px',
+                              border: `1px solid ${colors.border}`, fontSize: '12px'
+                            }}>
+                              {Object.entries(req.changes).map(([field, vals]) => {
+                                const label = field.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                                return (
+                                  <div key={field} style={{ 
+                                    display: 'flex', gap: '6px', padding: '4px 0',
+                                    borderBottom: `1px solid ${colors.border}22`, alignItems: 'baseline'
+                                  }}>
+                                    <span style={{ fontWeight: '600', color: colors.textMuted, minWidth: '90px', flexShrink: 0 }}>{label}:</span>
+                                    <span style={{ color: colors.error, textDecoration: 'line-through', opacity: 0.7 }}>
+                                      {vals.old || '(empty)'}
+                                    </span>
+                                    <span style={{ color: colors.textMuted }}>→</span>
+                                    <span style={{ color: colors.success, fontWeight: '600' }}>
+                                      {vals.new || '(empty)'}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <button onClick={() => handleApproval(req, true)} style={{ 
                               flex: 1, padding: '6px 12px', backgroundColor: colors.success, 
