@@ -78,7 +78,9 @@ export default function Dashboard() {
     loadNotifications()
 
     // Real-time subscriptions
-    const ch1 = supabase.channel('households-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, () => loadData()).subscribe()
+    const ch1 = supabase.channel('households-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, () => {
+      loadData()
+    }).subscribe()
     const ch2 = supabase.channel('edit-requests-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'edit_requests' }, () => loadNotifications()).subscribe()
     const ch3 = supabase.channel('notifications-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => loadNotifications()).subscribe()
 
@@ -152,6 +154,17 @@ export default function Dashboard() {
       console.error('Error loading notifications:', err)
     }
   }
+
+  // Sync selectedHousehold when households data refreshes (e.g. after approval)
+  useEffect(() => {
+    if (selectedHousehold && households.length > 0) {
+      const updated = households.find(h => h.id === selectedHousehold.id)
+      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedHousehold)) {
+        setSelectedHousehold(updated)
+        if (!editMode) setEditedData({ ...updated })
+      }
+    }
+  }, [households])
 
   // Global search effect
   useEffect(() => {
@@ -439,7 +452,8 @@ export default function Dashboard() {
         // Apply the changes to household
         const updates = {}
         Object.keys(request.changes).forEach(field => {
-          updates[field] = request.changes[field].new
+          const val = request.changes[field].new
+          updates[field] = (val === '' || val === undefined) ? null : val
         })
         updates.last_edited_by = request.requested_by
         updates.last_edited_by_name = request.requested_by_name
@@ -447,10 +461,12 @@ export default function Dashboard() {
         updates.pending_approval = false
         updates.verification_status = 'Verified'
 
-        await supabase
+        const { error: updateError } = await supabase
           .from('households')
           .update(updates)
           .eq('id', request.household_id)
+
+        if (updateError) throw updateError
       } else {
         // Just clear pending flag
         await supabase
@@ -482,6 +498,11 @@ export default function Dashboard() {
 
       await loadData()
       await loadNotifications()
+      // Refresh selected household if viewing the approved PAP
+      if (selectedHousehold?.id === request.household_id) {
+        const { data: refreshed } = await supabase.from('households').select('*').eq('id', request.household_id).single()
+        if (refreshed) { setSelectedHousehold(refreshed); setEditedData({ ...refreshed }) }
+      }
       alert(approved ? '✅ Changes approved and applied!' : '❌ Request rejected')
     } catch (err) {
       console.error('Approval error:', err)
