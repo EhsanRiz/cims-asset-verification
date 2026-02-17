@@ -355,7 +355,7 @@ export default function Dashboard() {
             id_document_url: editedData.id_document_url,
             asset_photo_url: editedData.asset_photo_url,
             map_url: editedData.map_url,
-            verification_status: editedData.verification_status,
+            verification_status: editedData.verification_status || 'pending',
             route_name: editedData.route_name,
             route_type: editedData.route_type,
             land_use: editedData.land_use || null,
@@ -459,7 +459,7 @@ export default function Dashboard() {
         updates.last_edited_by_name = request.requested_by_name
         updates.last_edited_at = new Date().toISOString()
         updates.pending_approval = false
-        updates.verification_status = 'Verified'
+        updates.verification_status = 'verified'
 
         const { error: updateError } = await supabase
           .from('households')
