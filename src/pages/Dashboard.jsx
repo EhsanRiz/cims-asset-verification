@@ -516,27 +516,57 @@ export default function Dashboard() {
     loadNotifications()
   }
 
+  // Compress image before upload (max 1200px, 80% quality)
+  const compressImage = (file) => {
+    return new Promise((resolve) => {
+      if (!file.type.startsWith('image/')) return resolve(file)
+      const img = new Image()
+      img.onload = () => {
+        const MAX = 1200
+        let w = img.width, h = img.height
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX }
+          else { w = Math.round(w * MAX / h); h = MAX }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+        canvas.toBlob((blob) => {
+          resolve(new File([blob], file.name, { type: 'image/jpeg' }))
+        }, 'image/jpeg', 0.8)
+      }
+      img.onerror = () => resolve(file)
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
+  // Upload file to R2 via API
+  const uploadToR2 = async (file, category) => {
+    const pap = selectedHousehold
+    const compressed = await compressImage(file)
+    const formData = new FormData()
+    formData.append('file', compressed)
+    formData.append('routeName', pap?.route_name || 'unknown')
+    formData.append('papName', `${pap?.household_head_first_name || ''}_${pap?.household_head_surname || ''}`.trim() || 'unknown')
+    formData.append('category', category)
+
+    const resp = await fetch('/api/upload', { method: 'POST', body: formData })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}))
+      throw new Error(err.error || 'Upload failed')
+    }
+    return resp.json()
+  }
+
   const handlePhotoUpload = async (field, file) => {
     if (!file) return
     try {
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${selectedHousehold.id}_${field}_${Date.now()}.${fileExt}`
-      const filePath = `photos/${fileName}`
+      const result = await uploadToR2(file, 'photos')
 
-      const { error: uploadError } = await supabase.storage
-        .from('cims-documents')
-        .upload(filePath, file, { upsert: true })
+      await supabase.from('households').update({ [field]: result.url }).eq('id', selectedHousehold.id)
 
-      if (uploadError) throw uploadError
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('cims-documents')
-        .getPublicUrl(filePath)
-
-      await supabase.from('households').update({ [field]: publicUrl }).eq('id', selectedHousehold.id)
-
-      setEditedData(prev => ({ ...prev, [field]: publicUrl }))
-      setSelectedHousehold(prev => ({ ...prev, [field]: publicUrl }))
+      setEditedData(prev => ({ ...prev, [field]: result.url }))
+      setSelectedHousehold(prev => ({ ...prev, [field]: result.url }))
       alert('Photo uploaded!')
     } catch (err) {
       console.error('Upload error:', err)
@@ -548,18 +578,13 @@ export default function Dashboard() {
   const handleDocumentUpload = async (file, docName) => {
     if (!file || !selectedHousehold) return
     try {
+      const result = await uploadToR2(file, 'documents')
+
       const fileExt = file.name.split('.').pop()
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const fileName = `${selectedHousehold.id}_doc_${timestamp}.${fileExt}`
-      const filePath = `photos/${fileName}`
-
-      const { error: uploadError } = await supabase.storage.from('cims-documents').upload(filePath, file, { upsert: true })
-      if (uploadError) throw uploadError
-
-      const { data: { publicUrl } } = supabase.storage.from('cims-documents').getPublicUrl(filePath)
-
-      const existing = selectedHousehold.other_documents || []
-      const newDoc = { name: docName || file.name, url: publicUrl, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase() }
+      // Always read current docs from DB to avoid race condition with sequential uploads
+      const { data: current } = await supabase.from('households').select('other_documents').eq('id', selectedHousehold.id).single()
+      const existing = current?.other_documents || []
+      const newDoc = { name: docName || file.name, url: result.url, key: result.key, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase() }
       const updated = [...existing, newDoc]
 
       await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
@@ -578,6 +603,11 @@ export default function Dashboard() {
     if (!confirm('Delete this document?')) return
     try {
       const existing = selectedHousehold.other_documents || []
+      const doc = existing[index]
+      // Delete from R2 if we have the key
+      if (doc?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
+      }
       const updated = existing.filter((_, i) => i !== index)
       await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
