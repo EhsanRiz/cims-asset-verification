@@ -1820,76 +1820,55 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
 
 // Document Uploader component
 function DocumentUploader({ documents, onUpload, onDelete, colors }) {
-  const [addingDocs, setAddingDocs] = useState(false)
-  const [docCount, setDocCount] = useState(1)
-  const [slots, setSlots] = useState([])
+  const [queue, setQueue] = useState([])
   const [uploading, setUploading] = useState(false)
+  const fileRef = useRef(null)
+  const folderRef = useRef(null)
 
-  const handleStart = () => {
-    setSlots(Array.from({ length: Math.max(1, Math.min(10, docCount)) }, () => ({ name: '', file: null, uploading: false, done: false, error: null })))
-    setAddingDocs(true)
+  const addFiles = (files) => {
+    const newItems = Array.from(files).filter(f => f.size > 0).map(f => ({
+      file: f,
+      name: f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') || f.name : f.name,
+      done: false,
+      error: null,
+      uploading: false
+    }))
+    setQueue(prev => [...prev, ...newItems])
   }
 
-  const updateSlot = (index, updates) => setSlots(prev => prev.map((s, i) => i === index ? { ...s, ...updates } : s))
+  const removeFromQueue = (index) => setQueue(prev => prev.filter((_, i) => i !== index))
 
   const handleUploadAll = async () => {
-    const toUpload = slots.filter(s => s.file && !s.done)
-    if (toUpload.length === 0) { alert('Please select at least one file.'); return }
+    const toUpload = queue.filter(q => !q.done)
+    if (toUpload.length === 0) return
     setUploading(true)
     let successCount = 0
-    for (let i = 0; i < slots.length; i++) {
-      const slot = slots[i]
-      if (!slot.file || slot.done) continue
-      updateSlot(i, { uploading: true })
+    const updated = [...queue]
+    for (let i = 0; i < updated.length; i++) {
+      if (updated[i].done) continue
+      updated[i] = { ...updated[i], uploading: true }
+      setQueue([...updated])
       try {
-        await onUpload(slot.file, slot.name || slot.file.name)
-        updateSlot(i, { uploading: false, done: true })
+        await onUpload(updated[i].file, updated[i].name)
+        updated[i] = { ...updated[i], uploading: false, done: true }
         successCount++
-      } catch (err) { updateSlot(i, { uploading: false, error: err.message }) }
+      } catch (err) {
+        updated[i] = { ...updated[i], uploading: false, error: err.message }
+      }
+      setQueue([...updated])
     }
     setUploading(false)
     if (successCount > 0) {
       alert(`✅ ${successCount} document${successCount > 1 ? 's' : ''} uploaded!`)
-      setAddingDocs(false); setSlots([]); setDocCount(1)
+      setQueue([])
     }
   }
 
-  if (addingDocs) {
-    return (
-      <div>
-        <div style={{ display: 'grid', gap: '12px', marginBottom: '16px' }}>
-          {slots.map((slot, i) => (
-            <div key={i} style={{ padding: '14px 16px', borderRadius: '10px', border: `1px solid ${slot.done ? colors.accent : slot.error ? '#ef4444' : colors.border}`, backgroundColor: slot.done ? `${colors.accent}08` : colors.bgLight }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                <div style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: slot.done ? `${colors.accent}20` : `${colors.urban}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  {slot.done ? <Check size={14} color={colors.accent} /> : <span style={{ fontSize: '12px', fontWeight: '700', color: colors.urban }}>{i + 1}</span>}
-                </div>
-                <span style={{ fontSize: '13px', fontWeight: '600', color: colors.textDark }}>Document {i + 1}</span>
-                {slot.done && <span style={{ fontSize: '12px', color: colors.accent, fontWeight: '600' }}>✓ Uploaded</span>}
-              </div>
-              {!slot.done && (<>
-                <input type="text" placeholder="Document name (e.g. Lease Agreement)" value={slot.name} onChange={(e) => updateSlot(i, { name: e.target.value })} style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: `1px solid ${colors.border}`, fontSize: '13px', outline: 'none', boxSizing: 'border-box', marginBottom: '8px', backgroundColor: 'white' }} />
-                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px', borderRadius: '8px', cursor: 'pointer', border: `1px dashed ${slot.file ? colors.accent : colors.border}`, backgroundColor: slot.file ? `${colors.accent}08` : 'white', fontSize: '13px', color: slot.file ? colors.accent : colors.textMuted, fontWeight: slot.file ? '600' : '400' }}>
-                  {slot.file ? (<><Check size={14} /> {slot.file.name}</>) : (<><Upload size={14} /> Choose file (PDF, image, or photo)</>)}
-                  <input type="file" accept="image/*,.pdf" onChange={(e) => { const f = e.target.files?.[0]; if (f) updateSlot(i, { file: f }) }} style={{ display: 'none' }} />
-                </label>
-                {slot.error && <p style={{ fontSize: '12px', color: '#ef4444', margin: '6px 0 0 0' }}>Error: {slot.error}</p>}
-              </>)}
-            </div>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={() => { setAddingDocs(false); setSlots([]); setDocCount(1) }} disabled={uploading} style={{ flex: 1, padding: '12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '10px', color: colors.textDark, fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
-          <button onClick={handleUploadAll} disabled={uploading} style={{ flex: 2, padding: '12px', backgroundColor: uploading ? '#94a3b8' : colors.accent, border: 'none', borderRadius: '10px', color: 'white', fontSize: '14px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            {uploading ? 'Uploading...' : 'Upload All'}
-          </button>
-        </div>
-      </div>
-    )
-  }
+  const btnStyle = (bg) => ({ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 16px', backgroundColor: bg, border: 'none', borderRadius: '8px', color: 'white', fontSize: '13px', fontWeight: '700', cursor: 'pointer', flex: 1 })
 
   return (
     <div>
+      {/* Existing documents */}
       {documents.length > 0 ? (
         <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
           {documents.map((doc, i) => (
@@ -1906,21 +1885,53 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
             </div>
           ))}
         </div>
-      ) : (
+      ) : queue.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '24px', color: colors.textLight, marginBottom: '16px' }}>
           <FileUp size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
           <p style={{ fontSize: '13px', margin: 0 }}>No documents uploaded yet</p>
         </div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
-        <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: '500', whiteSpace: 'nowrap' }}>Documents to upload:</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <button onClick={() => setDocCount(Math.max(1, docCount - 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark }}>−</button>
-          <span style={{ width: '36px', textAlign: 'center', fontSize: '16px', fontWeight: '700', color: colors.primary }}>{docCount}</span>
-          <button onClick={() => setDocCount(Math.min(10, docCount + 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: `1px solid ${colors.border}`, backgroundColor: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textDark }}>+</button>
+      ) : null}
+
+      {/* Upload queue */}
+      {queue.length > 0 && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <span style={{ fontSize: '13px', fontWeight: '700', color: colors.textDark }}>{queue.filter(q => !q.done).length} file{queue.filter(q => !q.done).length !== 1 ? 's' : ''} ready to upload</span>
+            {!uploading && <button onClick={() => setQueue([])} style={{ fontSize: '12px', color: colors.error, background: 'none', border: 'none', cursor: 'pointer', fontWeight: '600' }}>Clear all</button>}
+          </div>
+          <div style={{ display: 'grid', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+            {queue.map((item, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '8px', backgroundColor: item.done ? `${colors.accent}08` : item.error ? '#fef2f2' : colors.bgLight, border: `1px solid ${item.done ? colors.accent : item.error ? '#fecaca' : colors.border}`, fontSize: '13px' }}>
+                {item.uploading ? (
+                  <div style={{ width: '16px', height: '16px', border: '2px solid #e2e8f0', borderTopColor: colors.accent, borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+                ) : item.done ? (
+                  <Check size={16} color={colors.accent} style={{ flexShrink: 0 }} />
+                ) : (
+                  <FileText size={16} color={colors.textMuted} style={{ flexShrink: 0 }} />
+                )}
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: item.done ? colors.accent : colors.textDark, fontWeight: item.done ? '600' : '400' }}>{item.name}</span>
+                <span style={{ fontSize: '11px', color: colors.textMuted, flexShrink: 0 }}>{(item.file.size / 1024).toFixed(0)} KB</span>
+                {!item.done && !item.uploading && (
+                  <button onClick={() => removeFromQueue(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', flexShrink: 0 }}><X size={14} color={colors.textMuted} /></button>
+                )}
+              </div>
+            ))}
+          </div>
+          <button onClick={handleUploadAll} disabled={uploading} style={{ ...btnStyle(uploading ? '#94a3b8' : colors.accent), marginTop: '10px', width: '100%', padding: '12px' }}>
+            {uploading ? 'Uploading...' : `Upload ${queue.filter(q => !q.done).length} File${queue.filter(q => !q.done).length !== 1 ? 's' : ''}`}
+          </button>
         </div>
-        <button onClick={handleStart} style={{ flex: 1, padding: '10px 16px', backgroundColor: colors.urban, border: 'none', borderRadius: '8px', color: 'white', fontSize: '13px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-          <Plus size={16} /> Add Documents
+      )}
+
+      {/* Action buttons */}
+      <div style={{ display: 'flex', gap: '10px' }}>
+        <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
+        <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
+        <button onClick={() => fileRef.current?.click()} style={btnStyle(colors.urban)}>
+          <Upload size={16} /> Add Files
+        </button>
+        <button onClick={() => folderRef.current?.click()} style={btnStyle(colors.primary)}>
+          <FileUp size={16} /> Add Folder
         </button>
       </div>
     </div>
