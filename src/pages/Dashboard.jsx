@@ -6,7 +6,7 @@ import {
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
   Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle,
-  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft
+  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -155,11 +155,11 @@ export default function Dashboard() {
     }
   }
 
-  // Sync selectedHousehold when households data refreshes (e.g. after approval)
+  // Sync selectedHousehold when households data refreshes (e.g. after approval, document upload)
   useEffect(() => {
     if (selectedHousehold && households.length > 0) {
       const updated = households.find(h => h.id === selectedHousehold.id)
-      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedHousehold)) {
+      if (updated) {
         setSelectedHousehold(updated)
         if (!editMode) setEditedData({ ...updated })
       }
@@ -1339,6 +1339,11 @@ export default function Dashboard() {
               onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
               onDeletePAP={handleDeletePAP}
+              onRefresh={async () => {
+                await loadData()
+                const { data: fresh } = await supabase.from('households').select('*').eq('id', selectedHousehold.id).single()
+                if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
+              }}
               onPrint={handlePrint}
               colors={colors}
             />
@@ -1536,7 +1541,8 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onDeletePAP, onPrint, routes, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onDeletePAP, onRefresh, onPrint, routes, colors }) {
+  const [refreshing, setRefreshing] = useState(false)
   const data = editMode ? editedData : household
 
   return (
@@ -1608,6 +1614,14 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
             boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)'
           }}>
             <Printer size={16} /> Print
+          </button>
+          <button onClick={async () => { setRefreshing(true); await onRefresh(); setRefreshing(false) }} disabled={refreshing} style={{ 
+            display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', 
+            backgroundColor: colors.bgLight, color: colors.textDark, 
+            border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+            opacity: refreshing ? 0.6 : 1
+          }} title="Refresh data">
+            <RefreshCw size={16} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
           </button>
           {!editMode && (
             <button onClick={() => onDeletePAP(household)} style={{ 
