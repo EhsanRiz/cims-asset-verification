@@ -619,6 +619,45 @@ export default function Dashboard() {
     }
   }
 
+  // Upload CAF (single file, replaces existing)
+  const handleCAFUpload = async (file) => {
+    try {
+      // Delete old CAF from R2 if exists
+      const oldCAF = selectedHousehold.caf_document
+      if (oldCAF?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: oldCAF.key }) }).catch(() => {})
+      }
+      const result = await uploadToR2(file, 'caf')
+      const fileExt = file.name.split('.').pop() || 'pdf'
+      const cafDoc = { name: file.name, url: result.url, key: result.key, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase(), size: file.size }
+      await supabase.from('households').update({ caf_document: cafDoc }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, caf_document: cafDoc }))
+      setEditedData(prev => ({ ...prev, caf_document: cafDoc }))
+      alert('✅ CAF uploaded successfully!')
+    } catch (err) {
+      console.error('CAF upload error:', err)
+      alert('CAF upload failed: ' + err.message)
+    }
+  }
+
+  // Delete CAF
+  const handleDeleteCAF = async () => {
+    if (!confirm('Delete the Compensation Agreement Form?')) return
+    try {
+      const caf = selectedHousehold.caf_document
+      if (caf?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: caf.key }) }).catch(() => {})
+      }
+      await supabase.from('households').update({ caf_document: null }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, caf_document: null }))
+      setEditedData(prev => ({ ...prev, caf_document: null }))
+      alert('CAF deleted.')
+    } catch (err) {
+      console.error('CAF delete error:', err)
+      alert('Delete failed: ' + err.message)
+    }
+  }
+
   // Delete PAP
   const handleDeletePAP = async (pap) => {
     if (canApprove) {
@@ -1334,10 +1373,11 @@ export default function Dashboard() {
               setEditedData={setEditedData}
               onFieldChange={handleFieldChange}
               onSave={handleSave}
-              onPhotoUpload={handlePhotoUpload}
               routes={routes}
               onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
+              onCAFUpload={handleCAFUpload}
+              onDeleteCAF={handleDeleteCAF}
               onDeletePAP={handleDeletePAP}
               onRefresh={async () => {
                 await loadData()
@@ -1541,7 +1581,7 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onDeletePAP, onRefresh, onPrint, routes, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const data = editMode ? editedData : household
 
@@ -1645,7 +1685,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         {[
           { id: 'details', label: 'Details', icon: User },
           { id: 'valuation', label: 'Valuation', icon: FileText },
-          { id: 'documents', label: 'Documents', icon: Camera },
+          { id: 'documents', label: 'Documents', icon: FileText },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ 
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', 
@@ -1722,15 +1762,10 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
 
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
-          <Card title="Photos" icon={Camera} color={colors.primary} colors={colors}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-              <PhotoFrame label="PAP Photo" field="photograph_of_pap_url" url={data.photograph_of_pap_url} onUpload={onPhotoUpload} colors={colors} />
-              <PhotoFrame label="ID Document" field="id_document_url" url={data.id_document_url} onUpload={onPhotoUpload} colors={colors} />
-              <PhotoFrame label="Asset Photo" field="asset_photo_url" url={data.asset_photo_url} onUpload={onPhotoUpload} colors={colors} />
-              <PhotoFrame label="Location Map" field="map_url" url={data.map_url} onUpload={onPhotoUpload} colors={colors} />
-            </div>
+          <Card title="CAF (Compensation Agreement Form)" icon={FileText} color={colors.primary} colors={colors}>
+            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} colors={colors} />
           </Card>
-          <Card title="Other Documents" icon={FileUp} color={colors.urban} colors={colors}>
+          <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
             <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} colors={colors} />
           </Card>
         </div>
@@ -1862,6 +1897,68 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
   )
 }
 
+// CAF Uploader component (single file, replace on re-upload)
+function CAFUploader({ caf, onUpload, onDelete, colors }) {
+  const inputRef = useRef(null)
+  const [uploading, setUploading] = useState(false)
+
+  const handleFile = async (file) => {
+    if (!file) return
+    setUploading(true)
+    try {
+      await onUpload(file)
+    } catch (err) {
+      console.error('CAF upload error:', err)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div>
+      {caf ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px', backgroundColor: `${colors.accent}08`, borderRadius: '10px', border: `1px solid ${colors.accent}30` }}>
+          <div style={{ width: '44px', height: '44px', borderRadius: '10px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={22} color={colors.primary} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontSize: '14px', fontWeight: '700', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{caf.name}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{caf.file_type?.toUpperCase() || 'PDF'} • Uploaded {new Date(caf.uploaded_at).toLocaleDateString()}</p>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            <a href={caf.url} target="_blank" rel="noopener noreferrer" style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
+            <a href={caf.url} download={caf.name} target="_blank" rel="noopener noreferrer" style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
+            <button onClick={() => inputRef.current?.click()} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.warning}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><ArrowRightLeft size={16} color={colors.warning} /></button>
+            <button onClick={onDelete} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
+          </div>
+          <input ref={inputRef} type="file" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); e.target.value = '' }} style={{ display: 'none' }} />
+        </div>
+      ) : (
+        <div>
+          <div
+            onClick={() => !uploading && inputRef.current?.click()}
+            style={{ border: `2px dashed ${colors.border}`, borderRadius: '12px', padding: '32px', textAlign: 'center', cursor: uploading ? 'default' : 'pointer', transition: 'all 0.2s', backgroundColor: colors.bgLight }}
+            onMouseEnter={(e) => { if (!uploading) { e.currentTarget.style.borderColor = colors.accent; e.currentTarget.style.backgroundColor = `${colors.accent}08` } }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = colors.border; e.currentTarget.style.backgroundColor = colors.bgLight }}
+          >
+            {uploading ? (
+              <div>
+                <div style={{ width: '32px', height: '32px', border: `3px solid ${colors.border}`, borderTopColor: colors.accent, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px auto' }} />
+                <p style={{ fontSize: '14px', color: colors.textMuted, margin: 0 }}>Uploading...</p>
+              </div>
+            ) : (
+              <div>
+                <Upload size={32} color={colors.textLight} style={{ marginBottom: '10px' }} />
+                <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: '0 0 4px 0' }}>Upload Compensation Agreement Form</p>
+                <p style={{ fontSize: '12px', color: colors.textMuted, margin: 0 }}>Click to select PDF or other document</p>
+              </div>
+            )}
+          </div>
+          <input ref={inputRef} type="file" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); e.target.value = '' }} style={{ display: 'none' }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Document Uploader component
 function DocumentUploader({ documents, onUpload, onDelete, colors }) {
   const [queue, setQueue] = useState([])
@@ -1914,7 +2011,7 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
     <div>
       {/* Existing documents */}
       {documents.length > 0 ? (
-        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
+        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px', maxHeight: '400px', overflowY: 'auto' }}>
           {documents.map((doc, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
               <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: `${colors.urban}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={20} color={colors.urban} /></div>
@@ -1924,6 +2021,7 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
                 <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
+                <a href={doc.url} download={doc.name} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
                 <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
               </div>
             </div>
@@ -1969,7 +2067,7 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '10px' }}>
-        <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
+        <input ref={fileRef} type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <button onClick={() => fileRef.current?.click()} style={btnStyle(colors.urban)}>
           <Upload size={16} /> Add Files
