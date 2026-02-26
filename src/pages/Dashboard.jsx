@@ -1583,10 +1583,12 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 // Detail View Component
 function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, colors }) {
   const [refreshing, setRefreshing] = useState(false)
+  const [previewDoc, setPreviewDoc] = useState(null)
   const data = editMode ? editedData : household
 
   return (
     <div>
+      {previewDoc && <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} colors={colors} />}
       {/* Header */}
       <div style={{ 
         backgroundColor: colors.bgCard, 
@@ -1763,10 +1765,10 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="CAF (Compensation Agreement Form)" icon={FileText} color={colors.primary} colors={colors}>
-            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} colors={colors} />
+            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={setPreviewDoc} colors={colors} />
           </Card>
           <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
-            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} colors={colors} />
+            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={setPreviewDoc} colors={colors} />
           </Card>
         </div>
       )}
@@ -1897,8 +1899,49 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
   )
 }
 
+// Document Preview Modal
+function DocumentPreviewModal({ doc, onClose, colors }) {
+  if (!doc) return null
+  const ext = (doc.file_type || doc.name?.split('.').pop() || '').toLowerCase()
+  const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
+  const isPDF = ext === 'pdf'
+  const canPreview = isImage || isPDF
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '90%', maxWidth: '900px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontSize: '15px', fontWeight: '700', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.name}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{ext.toUpperCase()}{doc.uploaded_at ? ` • ${new Date(doc.uploaded_at).toLocaleDateString()}` : ''}</p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexShrink: 0, marginLeft: '12px' }}>
+            <a href={doc.url} download={doc.name} target="_blank" rel="noopener noreferrer" style={{ padding: '8px 14px', backgroundColor: colors.primary, borderRadius: '8px', color: 'white', textDecoration: 'none', fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}><Download size={14} /> Download</a>
+            <button onClick={onClose} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><X size={18} color={colors.textMuted} /></button>
+          </div>
+        </div>
+        {/* Content */}
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', minHeight: '400px' }}>
+          {isPDF ? (
+            <iframe src={doc.url} style={{ width: '100%', height: '100%', minHeight: '70vh', border: 'none' }} title={doc.name} />
+          ) : isImage ? (
+            <img src={doc.url} alt={doc.name} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', padding: '20px' }} />
+          ) : (
+            <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+              <FileText size={56} color={colors.textLight} style={{ marginBottom: '16px' }} />
+              <p style={{ fontSize: '16px', fontWeight: '600', color: colors.textDark, margin: '0 0 8px 0' }}>Preview not available for .{ext} files</p>
+              <p style={{ fontSize: '13px', color: colors.textMuted, margin: '0 0 20px 0' }}>Click Download above to view this file</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // CAF Uploader component (single file, replace on re-upload)
-function CAFUploader({ caf, onUpload, onDelete, colors }) {
+function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
   const inputRef = useRef(null)
   const [uploading, setUploading] = useState(false)
 
@@ -1924,7 +1967,7 @@ function CAFUploader({ caf, onUpload, onDelete, colors }) {
             <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{caf.file_type?.toUpperCase() || 'PDF'} • Uploaded {new Date(caf.uploaded_at).toLocaleDateString()}</p>
           </div>
           <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-            <a href={caf.url} target="_blank" rel="noopener noreferrer" style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
+            <button onClick={() => onPreview(caf)} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Eye size={16} color={colors.accent} /></button>
             <a href={caf.url} download={caf.name} target="_blank" rel="noopener noreferrer" style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
             <button onClick={() => inputRef.current?.click()} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.warning}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><ArrowRightLeft size={16} color={colors.warning} /></button>
             <button onClick={onDelete} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
@@ -1960,7 +2003,7 @@ function CAFUploader({ caf, onUpload, onDelete, colors }) {
 }
 
 // Document Uploader component
-function DocumentUploader({ documents, onUpload, onDelete, colors }) {
+function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) {
   const [queue, setQueue] = useState([])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
@@ -2020,7 +2063,7 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
                 <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{doc.file_type?.toUpperCase() || 'PDF'} • {new Date(doc.uploaded_at).toLocaleDateString()}</p>
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
+                <button onClick={() => onPreview(doc)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Eye size={16} color={colors.accent} /></button>
                 <a href={doc.url} download={doc.name} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
                 <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
               </div>
