@@ -28,6 +28,20 @@ const colors = {
   urban: '#7c3aed',
 }
 
+const OCCUPATION_OPTIONS = [
+  'Working for remuneration, formally/informally',
+  'Any form of self-employment',
+  'Subsistence farming (Crop Farming, Livestock, Livestock rearing)',
+  'School-going/Youngster',
+  'Unemployed (18 years or older)',
+  'Retired from formal employment',
+  'Homemaker/Housewife',
+  'Domestic responsibilities',
+  'Herdboy',
+  'Pensioner',
+  'Old and no longer economically active',
+]
+
 // Map icon component
 const MapIcon = ({ size = 24, color = 'currentColor' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -62,6 +76,16 @@ export default function Dashboard() {
   const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
   const canApprove = isAdmin || isMamokuena
 
+  // Build dynamic occupation options from base list + custom values in DB
+  const occupationOptions = (() => {
+    const baseSet = new Set(OCCUPATION_OPTIONS)
+    const customValues = households
+      .map(h => h.occupation_of_pap)
+      .filter(v => v && !baseSet.has(v) && v !== 'Other')
+    const uniqueCustom = [...new Set(customValues)]
+    return [...OCCUPATION_OPTIONS, ...uniqueCustom.sort(), 'Other']
+  })()
+
   // Notifications state
   const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
@@ -72,6 +96,7 @@ export default function Dashboard() {
   const [showAddPAP, setShowAddPAP] = useState(false)
   const [newPAPData, setNewPAPData] = useState({})
   const [savingNewPAP, setSavingNewPAP] = useState(false)
+  const [showCustomOccupationNew, setShowCustomOccupationNew] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -711,6 +736,7 @@ export default function Dashboard() {
       affected_area_perm: '', affected_area_temp: '', rate_perm: '', rate_temp: '',
       disturbance_allowance: '', total_compensation: '', verification_status: 'pending', other_documents: []
     })
+    setShowCustomOccupationNew(false)
     setShowAddPAP(true)
   }
 
@@ -754,6 +780,8 @@ export default function Dashboard() {
       'File Number': h.file_number || '',
       'ID Number': h.id_number || '',
       'Phone': h.cellphone_no || '',
+      'Gender': h.gender || '',
+      'Occupation': h.occupation_of_pap || '',
       'Permanent Area (sqm)': h.affected_area_perm || '',
       'Temporary Area (sqm)': h.affected_area_temp || '',
       'Disturbance Allowance (M)': h.disturbance_allowance || '',
@@ -1379,6 +1407,7 @@ export default function Dashboard() {
               onCAFUpload={handleCAFUpload}
               onDeleteCAF={handleDeleteCAF}
               onDeletePAP={handleDeletePAP}
+              occupationOptions={occupationOptions}
               onRefresh={async () => {
                 await loadData()
                 const { data: fresh } = await supabase.from('households').select('*').eq('id', selectedHousehold.id).single()
@@ -1409,7 +1438,18 @@ export default function Dashboard() {
                   <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} options={['Male', 'Female']} />
-                  <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  {showCustomOccupationNew ? (
+                    <div>
+                      <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>Occupation</p>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <input type="text" placeholder="Type occupation..." value={newPAPData.occupation_of_pap === 'Other' ? '' : (newPAPData.occupation_of_pap || '')} onChange={(e) => setNewPAPData(prev => ({ ...prev, occupation_of_pap: e.target.value }))}
+                          style={{ flex: 1, padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10` }} />
+                        <button onClick={() => { setShowCustomOccupationNew(false); setNewPAPData(prev => ({ ...prev, occupation_of_pap: '' })) }} style={{ padding: '8px 12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}>Back</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => { if (v === 'Other') { setShowCustomOccupationNew(true); setNewPAPData(prev => ({ ...prev, occupation_of_pap: '' })) } else { setNewPAPData(prev => ({ ...prev, [f]: v })) } }} colors={colors} options={occupationOptions} />
+                  )}
                   <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                 </div>
               </Card>
@@ -1581,9 +1621,10 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [previewDoc, setPreviewDoc] = useState(null)
+  const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const data = editMode ? editedData : household
 
   return (
@@ -1648,7 +1689,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
                 <XCircle size={16} /> Cancel
               </button>
             </>
-          )}}
+          )}
           <button onClick={onPrint} style={{ 
             display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
             backgroundColor: colors.primary, color: 'white', 
@@ -1713,6 +1754,22 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               <Field label="ID Number" value={data.id_number} field="id_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Phone" value={data.cellphone_no} field="cellphone_no" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Gender" value={data.gender} field="gender" editMode={editMode} onChange={onFieldChange} colors={colors} options={['Male', 'Female']} />
+              {editMode ? (
+                showCustomOccupation ? (
+                  <div>
+                    <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>Occupation</p>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <input type="text" placeholder="Type occupation..." value={data.occupation_of_pap === 'Other' ? '' : (data.occupation_of_pap || '')} onChange={(e) => onFieldChange('occupation_of_pap', e.target.value)}
+                        style={{ flex: 1, padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10` }} />
+                      <button onClick={() => { setShowCustomOccupation(false); onFieldChange('occupation_of_pap', '') }} style={{ padding: '8px 12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}>Back</button>
+                    </div>
+                  </div>
+                ) : (
+                  <Field label="Occupation" value={data.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => { if (v === 'Other') { setShowCustomOccupation(true); onFieldChange(f, '') } else { onFieldChange(f, v) } }} colors={colors} options={occupationOptions} />
+                )
+              ) : (
+                <Field label="Occupation" value={data.occupation_of_pap} colors={colors} />
+              )}
             </div>
           </Card>
 
@@ -2168,6 +2225,7 @@ td{padding:6px 10px;border:1px solid #e2e8f0}
 <tr><td class="label">Name / Lebitso</td><td>${data.household_head_first_name || ''} ${data.household_head_surname || ''}</td><td class="label">File No.</td><td>${data.file_number || '-'}</td></tr>
 <tr><td class="label">ID Number / Nomoro Ea ID</td><td>${data.id_number || '-'}</td><td class="label">Phone / Mohala</td><td>${data.cellphone_no || '-'}</td></tr>
 <tr><td class="label">Route</td><td>${data.route_name || '-'}</td><td class="label">Land Use</td><td>${data.land_use || '-'}</td></tr>
+<tr><td class="label">Gender</td><td>${data.gender || '-'}</td><td class="label">Occupation</td><td>${data.occupation_of_pap || '-'}</td></tr>
 <tr><td class="label">GPS</td><td colspan="3">${data.gps_coordinates || '-'}</td></tr>
 </table>
 </div>
