@@ -1614,7 +1614,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
                 <XCircle size={16} /> Cancel
               </button>
             </>
-          )}}
+          )}
           <button onClick={onPrint} style={{ 
             display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
             backgroundColor: colors.primary, color: 'white', 
