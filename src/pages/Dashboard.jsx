@@ -28,20 +28,6 @@ const colors = {
   urban: '#7c3aed',
 }
 
-const OCCUPATION_OPTIONS = [
-  'Working for remuneration, formally/informally',
-  'Any form of self-employment',
-  'Subsistence farming (Crop Farming, Livestock, Livestock rearing)',
-  'School-going/Youngster',
-  'Unemployed (18 years or older)',
-  'Retired from formal employment',
-  'Homemaker/Housewife',
-  'Domestic responsibilities',
-  'Herdboy',
-  'Pensioner',
-  'Old and no longer economically active',
-]
-
 // Map icon component
 const MapIcon = ({ size = 24, color = 'currentColor' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -76,16 +62,6 @@ export default function Dashboard() {
   const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
   const canApprove = isAdmin || isMamokuena
 
-  // Build dynamic occupation options from base list + custom values in DB
-  const occupationOptions = (() => {
-    const baseSet = new Set(OCCUPATION_OPTIONS)
-    const customValues = households
-      .map(h => h.occupation_of_pap)
-      .filter(v => v && !baseSet.has(v) && v !== 'Other')
-    const uniqueCustom = [...new Set(customValues)]
-    return [...OCCUPATION_OPTIONS, ...uniqueCustom.sort(), 'Other']
-  })()
-
   // Notifications state
   const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
@@ -96,7 +72,6 @@ export default function Dashboard() {
   const [showAddPAP, setShowAddPAP] = useState(false)
   const [newPAPData, setNewPAPData] = useState({})
   const [savingNewPAP, setSavingNewPAP] = useState(false)
-  const [showCustomOccupationNew, setShowCustomOccupationNew] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -347,7 +322,7 @@ export default function Dashboard() {
       const editableFields = [
         'household_head_first_name', 'household_head_surname', 'gender',
         'id_number', 'cellphone_no', 'file_number', 'occupation_of_pap',
-        'community_council', 'photograph_of_pap_url', 'id_document_url',
+        'community_council', 'original_village', 'current_village', 'photograph_of_pap_url', 'id_document_url',
         'asset_photo_url', 'map_url', 'verification_status',
         'route_name', 'route_type', 'land_use', 'gps_coordinates', 'latitude', 'longitude',
         'affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp',
@@ -376,6 +351,8 @@ export default function Dashboard() {
             file_number: editedData.file_number,
             occupation_of_pap: editedData.occupation_of_pap,
             community_council: editedData.community_council,
+            original_village: editedData.original_village || null,
+            current_village: editedData.current_village || null,
             photograph_of_pap_url: editedData.photograph_of_pap_url,
             id_document_url: editedData.id_document_url,
             asset_photo_url: editedData.asset_photo_url,
@@ -644,45 +621,6 @@ export default function Dashboard() {
     }
   }
 
-  // Upload CAF (single file, replaces existing)
-  const handleCAFUpload = async (file) => {
-    try {
-      // Delete old CAF from R2 if exists
-      const oldCAF = selectedHousehold.caf_document
-      if (oldCAF?.key) {
-        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: oldCAF.key }) }).catch(() => {})
-      }
-      const result = await uploadToR2(file, 'caf')
-      const fileExt = file.name.split('.').pop() || 'pdf'
-      const cafDoc = { name: file.name, url: result.url, key: result.key, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase(), size: file.size }
-      await supabase.from('households').update({ caf_document: cafDoc }).eq('id', selectedHousehold.id)
-      setSelectedHousehold(prev => ({ ...prev, caf_document: cafDoc }))
-      setEditedData(prev => ({ ...prev, caf_document: cafDoc }))
-      alert('✅ CAF uploaded successfully!')
-    } catch (err) {
-      console.error('CAF upload error:', err)
-      alert('CAF upload failed: ' + err.message)
-    }
-  }
-
-  // Delete CAF
-  const handleDeleteCAF = async () => {
-    if (!confirm('Delete the Compensation Agreement Form?')) return
-    try {
-      const caf = selectedHousehold.caf_document
-      if (caf?.key) {
-        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: caf.key }) }).catch(() => {})
-      }
-      await supabase.from('households').update({ caf_document: null }).eq('id', selectedHousehold.id)
-      setSelectedHousehold(prev => ({ ...prev, caf_document: null }))
-      setEditedData(prev => ({ ...prev, caf_document: null }))
-      alert('CAF deleted.')
-    } catch (err) {
-      console.error('CAF delete error:', err)
-      alert('Delete failed: ' + err.message)
-    }
-  }
-
   // Delete PAP
   const handleDeletePAP = async (pap) => {
     if (canApprove) {
@@ -730,13 +668,12 @@ export default function Dashboard() {
   const handleStartAddPAP = () => {
     setNewPAPData({
       household_head_first_name: '', household_head_surname: '', gender: '', id_number: '',
-      cellphone_no: '', file_number: '', occupation_of_pap: '', community_council: '',
+      cellphone_no: '', file_number: '', occupation_of_pap: '', community_council: '', original_village: '', current_village: '',
       land_use: 'Res', route_name: selectedRoute?.name || '', route_type: selectedRoute?.type || '',
       gps_coordinates: '', latitude: '', longitude: '',
       affected_area_perm: '', affected_area_temp: '', rate_perm: '', rate_temp: '',
       disturbance_allowance: '', total_compensation: '', verification_status: 'pending', other_documents: []
     })
-    setShowCustomOccupationNew(false)
     setShowAddPAP(true)
   }
 
@@ -782,6 +719,8 @@ export default function Dashboard() {
       'Phone': h.cellphone_no || '',
       'Gender': h.gender || '',
       'Occupation': h.occupation_of_pap || '',
+      'Original Village': h.original_village || '',
+      'Current Village': h.current_village || '',
       'Permanent Area (sqm)': h.affected_area_perm || '',
       'Temporary Area (sqm)': h.affected_area_temp || '',
       'Disturbance Allowance (M)': h.disturbance_allowance || '',
@@ -1401,13 +1340,11 @@ export default function Dashboard() {
               setEditedData={setEditedData}
               onFieldChange={handleFieldChange}
               onSave={handleSave}
+              onPhotoUpload={handlePhotoUpload}
               routes={routes}
               onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
-              onCAFUpload={handleCAFUpload}
-              onDeleteCAF={handleDeleteCAF}
               onDeletePAP={handleDeletePAP}
-              occupationOptions={occupationOptions}
               onRefresh={async () => {
                 await loadData()
                 const { data: fresh } = await supabase.from('households').select('*').eq('id', selectedHousehold.id).single()
@@ -1438,19 +1375,10 @@ export default function Dashboard() {
                   <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} options={['Male', 'Female']} />
-                  {showCustomOccupationNew ? (
-                    <div>
-                      <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>Occupation</p>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <input type="text" placeholder="Type occupation..." value={newPAPData.occupation_of_pap === 'Other' ? '' : (newPAPData.occupation_of_pap || '')} onChange={(e) => setNewPAPData(prev => ({ ...prev, occupation_of_pap: e.target.value }))}
-                          style={{ flex: 1, padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10` }} />
-                        <button onClick={() => { setShowCustomOccupationNew(false); setNewPAPData(prev => ({ ...prev, occupation_of_pap: '' })) }} style={{ padding: '8px 12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}>Back</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => { if (v === 'Other') { setShowCustomOccupationNew(true); setNewPAPData(prev => ({ ...prev, occupation_of_pap: '' })) } else { setNewPAPData(prev => ({ ...prev, [f]: v })) } }} colors={colors} options={occupationOptions} />
-                  )}
+                  <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Original Village" value={newPAPData.original_village} field="original_village" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Current Village" value={newPAPData.current_village} field="current_village" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                 </div>
               </Card>
               <div style={{ height: '16px' }} />
@@ -1621,15 +1549,12 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onDeletePAP, onRefresh, onPrint, routes, colors }) {
   const [refreshing, setRefreshing] = useState(false)
-  const [previewDoc, setPreviewDoc] = useState(null)
-  const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const data = editMode ? editedData : household
 
   return (
     <div>
-      {previewDoc && <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} colors={colors} />}
       {/* Header */}
       <div style={{ 
         backgroundColor: colors.bgCard, 
@@ -1689,7 +1614,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
                 <XCircle size={16} /> Cancel
               </button>
             </>
-          )}
+          )}}
           <button onClick={onPrint} style={{ 
             display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
             backgroundColor: colors.primary, color: 'white', 
@@ -1728,7 +1653,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         {[
           { id: 'details', label: 'Details', icon: User },
           { id: 'valuation', label: 'Valuation', icon: FileText },
-          { id: 'documents', label: 'Documents', icon: FileText },
+          { id: 'documents', label: 'Documents', icon: Camera },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ 
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', 
@@ -1754,22 +1679,10 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               <Field label="ID Number" value={data.id_number} field="id_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Phone" value={data.cellphone_no} field="cellphone_no" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Gender" value={data.gender} field="gender" editMode={editMode} onChange={onFieldChange} colors={colors} options={['Male', 'Female']} />
-              {editMode ? (
-                showCustomOccupation ? (
-                  <div>
-                    <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>Occupation</p>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <input type="text" placeholder="Type occupation..." value={data.occupation_of_pap === 'Other' ? '' : (data.occupation_of_pap || '')} onChange={(e) => onFieldChange('occupation_of_pap', e.target.value)}
-                        style={{ flex: 1, padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10` }} />
-                      <button onClick={() => { setShowCustomOccupation(false); onFieldChange('occupation_of_pap', '') }} style={{ padding: '8px 12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}>Back</button>
-                    </div>
-                  </div>
-                ) : (
-                  <Field label="Occupation" value={data.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => { if (v === 'Other') { setShowCustomOccupation(true); onFieldChange(f, '') } else { onFieldChange(f, v) } }} colors={colors} options={occupationOptions} />
-                )
-              ) : (
-                <Field label="Occupation" value={data.occupation_of_pap} colors={colors} />
-              )}
+              <Field label="Occupation" value={data.occupation_of_pap} field="occupation_of_pap" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Community Council" value={data.community_council} field="community_council" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Original Village" value={data.original_village} field="original_village" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Current Village" value={data.current_village} field="current_village" editMode={editMode} onChange={onFieldChange} colors={colors} />
             </div>
           </Card>
 
@@ -1821,11 +1734,16 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
 
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
-          <Card title="CAF (Compensation Agreement Form)" icon={FileText} color={colors.primary} colors={colors}>
-            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={setPreviewDoc} colors={colors} />
+          <Card title="Photos" icon={Camera} color={colors.primary} colors={colors}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+              <PhotoFrame label="PAP Photo" field="photograph_of_pap_url" url={data.photograph_of_pap_url} onUpload={onPhotoUpload} colors={colors} />
+              <PhotoFrame label="ID Document" field="id_document_url" url={data.id_document_url} onUpload={onPhotoUpload} colors={colors} />
+              <PhotoFrame label="Asset Photo" field="asset_photo_url" url={data.asset_photo_url} onUpload={onPhotoUpload} colors={colors} />
+              <PhotoFrame label="Location Map" field="map_url" url={data.map_url} onUpload={onPhotoUpload} colors={colors} />
+            </div>
           </Card>
-          <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
-            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={setPreviewDoc} colors={colors} />
+          <Card title="Other Documents" icon={FileUp} color={colors.urban} colors={colors}>
+            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} colors={colors} />
           </Card>
         </div>
       )}
@@ -1956,111 +1874,8 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
   )
 }
 
-// Document Preview Modal
-function DocumentPreviewModal({ doc, onClose, colors }) {
-  if (!doc) return null
-  const ext = (doc.file_type || doc.name?.split('.').pop() || '').toLowerCase()
-  const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
-  const isPDF = ext === 'pdf'
-  const canPreview = isImage || isPDF
-
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '90%', maxWidth: '900px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: '15px', fontWeight: '700', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{doc.name}</p>
-            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{ext.toUpperCase()}{doc.uploaded_at ? ` • ${new Date(doc.uploaded_at).toLocaleDateString()}` : ''}</p>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexShrink: 0, marginLeft: '12px' }}>
-            <a href={doc.url} download={doc.name} target="_blank" rel="noopener noreferrer" style={{ padding: '8px 14px', backgroundColor: colors.primary, borderRadius: '8px', color: 'white', textDecoration: 'none', fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}><Download size={14} /> Download</a>
-            <button onClick={onClose} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><X size={18} color={colors.textMuted} /></button>
-          </div>
-        </div>
-        {/* Content */}
-        <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', minHeight: '400px' }}>
-          {isPDF ? (
-            <iframe src={doc.url} style={{ width: '100%', height: '100%', minHeight: '70vh', border: 'none' }} title={doc.name} />
-          ) : isImage ? (
-            <img src={doc.url} alt={doc.name} style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', padding: '20px' }} />
-          ) : (
-            <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-              <FileText size={56} color={colors.textLight} style={{ marginBottom: '16px' }} />
-              <p style={{ fontSize: '16px', fontWeight: '600', color: colors.textDark, margin: '0 0 8px 0' }}>Preview not available for .{ext} files</p>
-              <p style={{ fontSize: '13px', color: colors.textMuted, margin: '0 0 20px 0' }}>Click Download above to view this file</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// CAF Uploader component (single file, replace on re-upload)
-function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
-  const inputRef = useRef(null)
-  const [uploading, setUploading] = useState(false)
-
-  const handleFile = async (file) => {
-    if (!file) return
-    setUploading(true)
-    try {
-      await onUpload(file)
-    } catch (err) {
-      console.error('CAF upload error:', err)
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  return (
-    <div>
-      {caf ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px', backgroundColor: `${colors.accent}08`, borderRadius: '10px', border: `1px solid ${colors.accent}30` }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={22} color={colors.primary} /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: '14px', fontWeight: '700', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{caf.name}</p>
-            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{caf.file_type?.toUpperCase() || 'PDF'} • Uploaded {new Date(caf.uploaded_at).toLocaleDateString()}</p>
-          </div>
-          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-            <button onClick={() => onPreview(caf)} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Eye size={16} color={colors.accent} /></button>
-            <a href={caf.url} download={caf.name} target="_blank" rel="noopener noreferrer" style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
-            <button onClick={() => inputRef.current?.click()} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: `${colors.warning}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><ArrowRightLeft size={16} color={colors.warning} /></button>
-            <button onClick={onDelete} style={{ width: '36px', height: '36px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
-          </div>
-          <input ref={inputRef} type="file" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); e.target.value = '' }} style={{ display: 'none' }} />
-        </div>
-      ) : (
-        <div>
-          <div
-            onClick={() => !uploading && inputRef.current?.click()}
-            style={{ border: `2px dashed ${colors.border}`, borderRadius: '12px', padding: '32px', textAlign: 'center', cursor: uploading ? 'default' : 'pointer', transition: 'all 0.2s', backgroundColor: colors.bgLight }}
-            onMouseEnter={(e) => { if (!uploading) { e.currentTarget.style.borderColor = colors.accent; e.currentTarget.style.backgroundColor = `${colors.accent}08` } }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = colors.border; e.currentTarget.style.backgroundColor = colors.bgLight }}
-          >
-            {uploading ? (
-              <div>
-                <div style={{ width: '32px', height: '32px', border: `3px solid ${colors.border}`, borderTopColor: colors.accent, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px auto' }} />
-                <p style={{ fontSize: '14px', color: colors.textMuted, margin: 0 }}>Uploading...</p>
-              </div>
-            ) : (
-              <div>
-                <Upload size={32} color={colors.textLight} style={{ marginBottom: '10px' }} />
-                <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: '0 0 4px 0' }}>Upload Compensation Agreement Form</p>
-                <p style={{ fontSize: '12px', color: colors.textMuted, margin: 0 }}>Click to select PDF or other document</p>
-              </div>
-            )}
-          </div>
-          <input ref={inputRef} type="file" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); e.target.value = '' }} style={{ display: 'none' }} />
-        </div>
-      )}
-    </div>
-  )
-}
-
 // Document Uploader component
-function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) {
+function DocumentUploader({ documents, onUpload, onDelete, colors }) {
   const [queue, setQueue] = useState([])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
@@ -2111,7 +1926,7 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
     <div>
       {/* Existing documents */}
       {documents.length > 0 ? (
-        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px', maxHeight: '400px', overflowY: 'auto' }}>
+        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
           {documents.map((doc, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
               <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: `${colors.urban}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={20} color={colors.urban} /></div>
@@ -2120,8 +1935,7 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
                 <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{doc.file_type?.toUpperCase() || 'PDF'} • {new Date(doc.uploaded_at).toLocaleDateString()}</p>
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                <button onClick={() => onPreview(doc)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Eye size={16} color={colors.accent} /></button>
-                <a href={doc.url} download={doc.name} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
+                <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
                 <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
               </div>
             </div>
@@ -2167,7 +1981,7 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '10px' }}>
-        <input ref={fileRef} type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
+        <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <button onClick={() => fileRef.current?.click()} style={btnStyle(colors.urban)}>
           <Upload size={16} /> Add Files
@@ -2225,7 +2039,7 @@ td{padding:6px 10px;border:1px solid #e2e8f0}
 <tr><td class="label">Name / Lebitso</td><td>${data.household_head_first_name || ''} ${data.household_head_surname || ''}</td><td class="label">File No.</td><td>${data.file_number || '-'}</td></tr>
 <tr><td class="label">ID Number / Nomoro Ea ID</td><td>${data.id_number || '-'}</td><td class="label">Phone / Mohala</td><td>${data.cellphone_no || '-'}</td></tr>
 <tr><td class="label">Route</td><td>${data.route_name || '-'}</td><td class="label">Land Use</td><td>${data.land_use || '-'}</td></tr>
-<tr><td class="label">Gender</td><td>${data.gender || '-'}</td><td class="label">Occupation</td><td>${data.occupation_of_pap || '-'}</td></tr>
+<tr><td class="label">Original Village</td><td>${data.original_village || '-'}</td><td class="label">Current Village</td><td>${data.current_village || '-'}</td></tr>
 <tr><td class="label">GPS</td><td colspan="3">${data.gps_coordinates || '-'}</td></tr>
 </table>
 </div>
