@@ -28,6 +28,21 @@ const colors = {
   urban: '#7c3aed',
 }
 
+// Occupation options
+const OCCUPATION_OPTIONS = [
+  'Working for remuneration, formally/informally',
+  'Any form of self-employment',
+  'Subsistence farming (Crop Farming, Livestock, Livestock rearing)',
+  'School-going/Youngster',
+  'Unemployed (18 years or older)',
+  'Retired from formal employment',
+  'Homemaker/Housewife',
+  'Domestic responsibilities',
+  'Herdboy',
+  'Pensioner',
+  'Old and no longer economically active',
+]
+
 // Map icon component
 const MapIcon = ({ size = 24, color = 'currentColor' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -72,6 +87,15 @@ export default function Dashboard() {
   const [showAddPAP, setShowAddPAP] = useState(false)
   const [newPAPData, setNewPAPData] = useState({})
   const [savingNewPAP, setSavingNewPAP] = useState(false)
+  const [showCustomOccupationNew, setShowCustomOccupationNew] = useState(false)
+  const [previewDoc, setPreviewDoc] = useState(null)
+
+  // Build dynamic occupation options from existing data
+  const occupationOptions = (() => {
+    const existing = households.map(h => h.occupation_of_pap).filter(Boolean).map(o => o.trim())
+    const unique = [...new Set(existing)].filter(o => !OCCUPATION_OPTIONS.includes(o) && o !== 'Other')
+    return [...OCCUPATION_OPTIONS, ...unique.sort(), 'Other']
+  })()
 
   useEffect(() => {
     loadData()
@@ -618,6 +642,44 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Delete error:', err)
       alert('Error: ' + err.message)
+    }
+  }
+
+  // Upload CAF (single file, replaces existing)
+  const handleCAFUpload = async (file) => {
+    try {
+      const oldCAF = selectedHousehold.caf_document
+      if (oldCAF?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: oldCAF.key }) }).catch(() => {})
+      }
+      const result = await uploadToR2(file, 'caf')
+      const fileExt = file.name.split('.').pop() || 'pdf'
+      const cafDoc = { name: file.name, url: result.url, key: result.key, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase(), size: file.size }
+      await supabase.from('households').update({ caf_document: cafDoc }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, caf_document: cafDoc }))
+      setEditedData(prev => ({ ...prev, caf_document: cafDoc }))
+      alert('✅ CAF uploaded successfully!')
+    } catch (err) {
+      console.error('CAF upload error:', err)
+      alert('CAF upload failed: ' + err.message)
+    }
+  }
+
+  // Delete CAF
+  const handleDeleteCAF = async () => {
+    if (!confirm('Delete the Compensation Agreement Form?')) return
+    try {
+      const caf = selectedHousehold.caf_document
+      if (caf?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: caf.key }) }).catch(() => {})
+      }
+      await supabase.from('households').update({ caf_document: null }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, caf_document: null }))
+      setEditedData(prev => ({ ...prev, caf_document: null }))
+      alert('CAF deleted.')
+    } catch (err) {
+      console.error('CAF delete error:', err)
+      alert('Delete failed: ' + err.message)
     }
   }
 
@@ -1344,7 +1406,11 @@ export default function Dashboard() {
               routes={routes}
               onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
+              onCAFUpload={handleCAFUpload}
+              onDeleteCAF={handleDeleteCAF}
               onDeletePAP={handleDeletePAP}
+              occupationOptions={occupationOptions}
+              onPreviewDoc={setPreviewDoc}
               onRefresh={async () => {
                 await loadData()
                 const { data: fresh } = await supabase.from('households').select('*').eq('id', selectedHousehold.id).single()
@@ -1375,7 +1441,17 @@ export default function Dashboard() {
                   <Field label="ID Number" value={newPAPData.id_number} field="id_number" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Phone" value={newPAPData.cellphone_no} field="cellphone_no" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Gender" value={newPAPData.gender} field="gender" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} options={['Male', 'Female']} />
-                  <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  {!showCustomOccupationNew ? (
+                    <Field label="Occupation" value={newPAPData.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => { if (v === 'Other') { setShowCustomOccupationNew(true); setNewPAPData(prev => ({ ...prev, occupation_of_pap: '' })) } else { setNewPAPData(prev => ({ ...prev, [f]: v })) } }} colors={colors} options={occupationOptions} />
+                  ) : (
+                    <div>
+                      <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>Occupation (Custom)</p>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <input type="text" value={newPAPData.occupation_of_pap || ''} onChange={(e) => setNewPAPData(prev => ({ ...prev, occupation_of_pap: e.target.value }))} placeholder="Enter occupation" style={{ flex: 1, padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10` }} />
+                        <button onClick={() => setShowCustomOccupationNew(false)} style={{ padding: '8px 12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>Back</button>
+                      </div>
+                    </div>
+                  )}
                   <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Original Village" value={newPAPData.original_village} field="original_village" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Current Village" value={newPAPData.current_village} field="current_village" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
@@ -1414,6 +1490,11 @@ export default function Dashboard() {
         </div>
       )}
       </main>
+
+      {/* Document Preview Modal */}
+      {previewDoc && (
+        <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} colors={colors} />
+      )}
 
       {/* Footer */}
       <footer style={{ 
@@ -1549,8 +1630,9 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onDeletePAP, onRefresh, onPrint, routes, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, colors }) {
   const [refreshing, setRefreshing] = useState(false)
+  const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const data = editMode ? editedData : household
 
   return (
@@ -1653,7 +1735,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
         {[
           { id: 'details', label: 'Details', icon: User },
           { id: 'valuation', label: 'Valuation', icon: FileText },
-          { id: 'documents', label: 'Documents', icon: Camera },
+          { id: 'documents', label: 'Documents', icon: FileText },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ 
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', 
@@ -1679,7 +1761,19 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               <Field label="ID Number" value={data.id_number} field="id_number" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Phone" value={data.cellphone_no} field="cellphone_no" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Gender" value={data.gender} field="gender" editMode={editMode} onChange={onFieldChange} colors={colors} options={['Male', 'Female']} />
-              <Field label="Occupation" value={data.occupation_of_pap} field="occupation_of_pap" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              {editMode && !showCustomOccupation ? (
+                <Field label="Occupation" value={data.occupation_of_pap} field="occupation_of_pap" editMode={true} onChange={(f, v) => { if (v === 'Other') { setShowCustomOccupation(true); onFieldChange(f, '') } else { onFieldChange(f, v) } }} colors={colors} options={occupationOptions} />
+              ) : editMode && showCustomOccupation ? (
+                <div>
+                  <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>Occupation (Custom)</p>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <input type="text" value={data.occupation_of_pap || ''} onChange={(e) => onFieldChange('occupation_of_pap', e.target.value)} placeholder="Enter occupation" style={{ flex: 1, padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10` }} />
+                    <button onClick={() => setShowCustomOccupation(false)} style={{ padding: '8px 12px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>Back</button>
+                  </div>
+                </div>
+              ) : (
+                <Field label="Occupation" value={data.occupation_of_pap} colors={colors} />
+              )}
               <Field label="Community Council" value={data.community_council} field="community_council" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Original Village" value={data.original_village} field="original_village" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Current Village" value={data.current_village} field="current_village" editMode={editMode} onChange={onFieldChange} colors={colors} />
@@ -1734,16 +1828,11 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
 
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
-          <Card title="Photos" icon={Camera} color={colors.primary} colors={colors}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-              <PhotoFrame label="PAP Photo" field="photograph_of_pap_url" url={data.photograph_of_pap_url} onUpload={onPhotoUpload} colors={colors} />
-              <PhotoFrame label="ID Document" field="id_document_url" url={data.id_document_url} onUpload={onPhotoUpload} colors={colors} />
-              <PhotoFrame label="Asset Photo" field="asset_photo_url" url={data.asset_photo_url} onUpload={onPhotoUpload} colors={colors} />
-              <PhotoFrame label="Location Map" field="map_url" url={data.map_url} onUpload={onPhotoUpload} colors={colors} />
-            </div>
+          <Card title="Compensation Agreement Form (CAF)" icon={FileText} color={colors.primary} colors={colors}>
+            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} colors={colors} />
           </Card>
-          <Card title="Other Documents" icon={FileUp} color={colors.urban} colors={colors}>
-            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} colors={colors} />
+          <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
+            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={onPreviewDoc} colors={colors} />
           </Card>
         </div>
       )}
@@ -1875,7 +1964,7 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
 }
 
 // Document Uploader component
-function DocumentUploader({ documents, onUpload, onDelete, colors }) {
+function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) {
   const [queue, setQueue] = useState([])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
@@ -1926,7 +2015,7 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
     <div>
       {/* Existing documents */}
       {documents.length > 0 ? (
-        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px' }}>
+        <div style={{ display: 'grid', gap: '10px', marginBottom: '16px', maxHeight: '400px', overflowY: 'auto' }}>
           {documents.map((doc, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
               <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: `${colors.urban}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={20} color={colors.urban} /></div>
@@ -1935,7 +2024,8 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
                 <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{doc.file_type?.toUpperCase() || 'PDF'} • {new Date(doc.uploaded_at).toLocaleDateString()}</p>
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                <a href={doc.url} target="_blank" rel="noopener noreferrer" style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Eye size={16} color={colors.accent} /></a>
+                <button onClick={() => onPreview?.(doc)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Eye size={16} color={colors.accent} /></button>
+                <a href={doc.url} download style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
                 <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
               </div>
             </div>
@@ -1981,7 +2071,7 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '10px' }}>
-        <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
+        <input ref={fileRef} type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <button onClick={() => fileRef.current?.click()} style={btnStyle(colors.urban)}>
           <Upload size={16} /> Add Files
@@ -1989,6 +2079,74 @@ function DocumentUploader({ documents, onUpload, onDelete, colors }) {
         <button onClick={() => folderRef.current?.click()} style={btnStyle(colors.primary)}>
           <FileUp size={16} /> Add Folder
         </button>
+      </div>
+    </div>
+  )
+}
+
+// CAF Uploader component
+function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
+  const inputRef = useRef(null)
+  return (
+    <div>
+      {caf ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+          <div style={{ width: '44px', height: '44px', borderRadius: '10px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={22} color={colors.primary} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{caf.name}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{caf.file_type?.toUpperCase() || 'PDF'} • {new Date(caf.uploaded_at).toLocaleDateString()}</p>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            <button onClick={() => onPreview?.(caf)} style={{ padding: '8px 14px', backgroundColor: `${colors.accent}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.accent }}><Eye size={14} /> View</button>
+            <a href={caf.url} download style={{ padding: '8px 14px', backgroundColor: `${colors.primary}15`, borderRadius: '8px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.primary }}><Download size={14} /> Download</a>
+            <button onClick={() => inputRef.current?.click()} style={{ padding: '8px 14px', backgroundColor: `${colors.warning}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.warning }}><Upload size={14} /> Replace</button>
+            <button onClick={onDelete} style={{ padding: '8px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: '#ef4444' }}><Trash2 size={14} /> Delete</button>
+          </div>
+          <input ref={inputRef} type="file" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} style={{ display: 'none' }} />
+        </div>
+      ) : (
+        <div style={{ textAlign: 'center', padding: '30px 20px', border: `2px dashed ${colors.border}`, borderRadius: '12px', cursor: 'pointer' }} onClick={() => inputRef.current?.click()}>
+          <Upload size={32} color={colors.textLight} style={{ opacity: 0.4, marginBottom: '8px' }} />
+          <p style={{ fontSize: '14px', color: colors.textMuted, margin: '0 0 4px 0', fontWeight: '600' }}>Upload Compensation Agreement Form</p>
+          <p style={{ fontSize: '12px', color: colors.textLight, margin: 0 }}>Click to select a file (PDF, image, or document)</p>
+          <input ref={inputRef} type="file" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} style={{ display: 'none' }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Document Preview Modal
+function DocumentPreviewModal({ doc, onClose, colors }) {
+  const ext = (doc.file_type || doc.name?.split('.').pop() || '').toLowerCase()
+  const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
+  const isPdf = ext === 'pdf'
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '90%', maxWidth: '900px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <p style={{ fontSize: '15px', fontWeight: '700', color: colors.textDark, margin: 0 }}>{doc.name}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{ext.toUpperCase()} • {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleDateString() : ''}</p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <a href={doc.url} download style={{ padding: '8px 14px', backgroundColor: colors.accent, borderRadius: '8px', textDecoration: 'none', color: 'white', fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}><Download size={14} /> Download</a>
+            <button onClick={onClose} style={{ padding: '8px', backgroundColor: colors.bgLight, border: 'none', borderRadius: '8px', cursor: 'pointer' }}><X size={18} color={colors.textMuted} /></button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', minHeight: '400px' }}>
+          {isPdf ? (
+            <iframe src={doc.url} style={{ width: '100%', height: '70vh', border: 'none', borderRadius: '8px' }} />
+          ) : isImage ? (
+            <img src={doc.url} alt={doc.name} style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: '8px' }} />
+          ) : (
+            <div style={{ textAlign: 'center', color: colors.textMuted }}>
+              <FileText size={48} style={{ opacity: 0.3, marginBottom: '12px' }} />
+              <p style={{ fontSize: '14px', margin: '0 0 8px 0' }}>Preview not available for this file type</p>
+              <a href={doc.url} download style={{ padding: '10px 20px', backgroundColor: colors.accent, borderRadius: '8px', textDecoration: 'none', color: 'white', fontSize: '13px', fontWeight: '600' }}>Download File</a>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
