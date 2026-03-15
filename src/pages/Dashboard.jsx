@@ -1452,7 +1452,7 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )}
-                  <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
+                  <Field label="Community Council" value={newPAPData.community_council} field="community_council" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} options={['Likila', 'Ngoajane', 'Nqoe', "T'sa-le-Moleka", 'Botha-Bothe Urban Council', 'Maisa-Phoka', 'Menkhoaneng', 'Sephokong']} />
                   <Field label="Original Village" value={newPAPData.original_village} field="original_village" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                   <Field label="Current Village" value={newPAPData.current_village} field="current_village" editMode={true} onChange={(f, v) => setNewPAPData(prev => ({ ...prev, [f]: v }))} colors={colors} />
                 </div>
@@ -1774,7 +1774,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               ) : (
                 <Field label="Occupation" value={data.occupation_of_pap} colors={colors} />
               )}
-              <Field label="Community Council" value={data.community_council} field="community_council" editMode={editMode} onChange={onFieldChange} colors={colors} />
+              <Field label="Community Council" value={data.community_council} field="community_council" editMode={editMode} onChange={onFieldChange} colors={colors} options={['Likila', 'Ngoajane', 'Nqoe', "T'sa-le-Moleka", 'Botha-Bothe Urban Council', 'Maisa-Phoka', 'Menkhoaneng', 'Sephokong']} />
               <Field label="Original Village" value={data.original_village} field="original_village" editMode={editMode} onChange={onFieldChange} colors={colors} />
               <Field label="Current Village" value={data.current_village} field="current_village" editMode={editMode} onChange={onFieldChange} colors={colors} />
             </div>
