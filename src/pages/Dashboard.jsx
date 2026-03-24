@@ -1320,23 +1320,32 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
+              <div style={{ maxHeight: '65vh', overflowY: 'auto', overflowX: 'auto' }}>
                 {filteredPAPs.length === 0 ? (
                   <div style={{ padding: '60px', textAlign: 'center', color: colors.textMuted }}>
                     <Users size={48} style={{ opacity: 0.3 }} />
                     <p style={{ marginTop: '12px' }}>No PAPs found</p>
                   </div>
                 ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
                     <thead>
                       <tr style={{ backgroundColor: colors.bgLight }}>
-                        {['File No.', 'PAP Name', 'Land Use', 'Documents', 'CAF', ''].map((header, i) => (
+                        {[
+                          { label: 'File No.', minWidth: '220px' },
+                          { label: 'PAP Name' },
+                          { label: 'Land Use' },
+                          { label: 'Documents' },
+                          { label: 'CAF' },
+                          { label: '' },
+                        ].map((header, i) => (
                           <th key={i} style={{ 
                             padding: '14px 20px', textAlign: i === 5 ? 'right' : 'left', 
                             fontSize: '11px', fontWeight: '700', color: colors.textMuted, 
                             textTransform: 'uppercase', letterSpacing: '0.5px',
-                            borderBottom: `1px solid ${colors.border}`
-                          }}>{header}</th>
+                            borderBottom: `1px solid ${colors.border}`,
+                            whiteSpace: 'nowrap',
+                            minWidth: header.minWidth || undefined,
+                          }}>{header.label}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1346,7 +1355,7 @@ export default function Dashboard() {
                           style={{ cursor: 'pointer', borderBottom: `1px solid ${colors.border}`, transition: 'background-color 0.15s' }}
                           onMouseOver={(e) => e.currentTarget.style.backgroundColor = colors.bgLight}
                           onMouseOut={(e) => e.currentTarget.style.backgroundColor = colors.bgCard}>
-                          <td style={{ padding: '16px 20px', color: colors.textDark, fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap' }}>{pap.file_number || '-'}</td>
+                          <td style={{ padding: '16px 20px', color: colors.textDark, fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', minWidth: '220px' }}>{pap.file_number || '-'}</td>
                           <td style={{ padding: '16px 20px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                               <div style={{ 
