@@ -1330,9 +1330,9 @@ export default function Dashboard() {
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ backgroundColor: colors.bgLight }}>
-                        {['File No.', 'PAP Name', 'Land Use', 'CAF', 'Documents', 'Status', ''].map((header, i) => (
+                        {['File No.', 'PAP Name', 'Land Use', 'Documents', 'CAF', ''].map((header, i) => (
                           <th key={i} style={{ 
-                            padding: '14px 20px', textAlign: i === 6 ? 'right' : 'left', 
+                            padding: '14px 20px', textAlign: i === 5 ? 'right' : 'left', 
                             fontSize: '11px', fontWeight: '700', color: colors.textMuted, 
                             textTransform: 'uppercase', letterSpacing: '0.5px',
                             borderBottom: `1px solid ${colors.border}`
@@ -1346,7 +1346,7 @@ export default function Dashboard() {
                           style={{ cursor: 'pointer', borderBottom: `1px solid ${colors.border}`, transition: 'background-color 0.15s' }}
                           onMouseOver={(e) => e.currentTarget.style.backgroundColor = colors.bgLight}
                           onMouseOut={(e) => e.currentTarget.style.backgroundColor = colors.bgCard}>
-                          <td style={{ padding: '16px 20px', color: colors.textMuted, fontSize: '14px', fontWeight: '600' }}>{pap.file_number || '-'}</td>
+                          <td style={{ padding: '16px 20px', color: colors.textDark, fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap' }}>{pap.file_number || '-'}</td>
                           <td style={{ padding: '16px 20px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                               <div style={{ 
@@ -1354,7 +1354,8 @@ export default function Dashboard() {
                                 background: `linear-gradient(135deg, ${colors.primary}15 0%, ${colors.primary}25 100%)`,
                                 color: colors.primary, 
                                 display: 'flex', alignItems: 'center', justifyContent: 'center', 
-                                fontSize: '13px', fontWeight: '700' 
+                                fontSize: '13px', fontWeight: '700',
+                                flexShrink: 0
                               }}>
                                 {pap.household_head_first_name?.[0]}{pap.household_head_surname?.[0]}
                               </div>
@@ -1365,13 +1366,6 @@ export default function Dashboard() {
                           </td>
                           <td style={{ padding: '16px 20px', color: colors.textMuted, fontSize: '14px' }}>{pap.land_use || '-'}</td>
                           <td style={{ padding: '16px 20px' }}>
-                            {pap.caf_document ? (
-                              <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Yes</span>
-                            ) : (
-                              <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
-                            )}
-                          </td>
-                          <td style={{ padding: '16px 20px' }}>
                             {pap.other_documents?.length > 0 ? (
                               <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ {pap.other_documents.length}</span>
                             ) : (
@@ -1379,13 +1373,11 @@ export default function Dashboard() {
                             )}
                           </td>
                           <td style={{ padding: '16px 20px' }}>
-                            <span style={{ 
-                              padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '600',
-                              backgroundColor: pap.verification_status?.toLowerCase() === 'verified' ? `${colors.success}20` : `${colors.warning}20`,
-                              color: pap.verification_status?.toLowerCase() === 'verified' ? colors.success : colors.warning
-                            }}>
-                              {pap.verification_status || 'pending'}
-                            </span>
+                            {pap.caf_document ? (
+                              <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Yes</span>
+                            ) : (
+                              <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
+                            )}
                           </td>
                           <td style={{ padding: '16px 20px', textAlign: 'right' }}>
                             <ChevronRight size={20} color={colors.textLight} />
