@@ -6,7 +6,7 @@ import {
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
   Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle,
-  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw, MessageCircle, Send
+  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -76,7 +76,6 @@ export default function Dashboard() {
   const isAdmin = user?.role === 'Admin' || user?.role === 'admin'
   const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
   const canApprove = isAdmin || isMamokuena
-  const isClient = user?.role === 'Client' || user?.role === 'client'
 
   // Notifications state
   const [notifications, setNotifications] = useState([])
@@ -200,12 +199,7 @@ export default function Dashboard() {
         h.household_head_surname?.toLowerCase().includes(search) ||
         h.id_number?.toLowerCase().includes(search) ||
         h.file_number?.toLowerCase().includes(search) ||
-        h.route_name?.toLowerCase().includes(search) ||
-        h.cellphone_no?.toLowerCase().includes(search) ||
-        h.occupation_of_pap?.toLowerCase().includes(search) ||
-        h.original_village?.toLowerCase().includes(search) ||
-        h.current_village?.toLowerCase().includes(search) ||
-        h.community_council?.toLowerCase().includes(search)
+        h.route_name?.toLowerCase().includes(search)
       ).slice(0, 20) // Limit to 20 results
       setGlobalSearchResults(results)
     } else {
@@ -307,12 +301,12 @@ export default function Dashboard() {
           h.household_head_first_name?.toLowerCase().includes(search) ||
           h.household_head_surname?.toLowerCase().includes(search) ||
           h.id_number?.toLowerCase().includes(search) ||
-          h.file_number?.toLowerCase().includes(search) ||
-          h.cellphone_no?.toLowerCase().includes(search) ||
-          h.occupation_of_pap?.toLowerCase().includes(search) ||
-          h.original_village?.toLowerCase().includes(search) ||
-          h.current_village?.toLowerCase().includes(search)
+          h.file_number?.toLowerCase().includes(search)
         )
+      }).sort((a, b) => {
+        const fa = a.file_number || ''
+        const fb = b.file_number || ''
+        return fa.localeCompare(fb, undefined, { numeric: true, sensitivity: 'base' })
       })
     : []
 
@@ -693,38 +687,6 @@ export default function Dashboard() {
     }
   }
 
-  // Add comment
-  const handleAddComment = async (text) => {
-    if (!text?.trim() || !selectedHousehold) return
-    try {
-      const { data: current } = await supabase.from('households').select('comments').eq('id', selectedHousehold.id).single()
-      const existing = current?.comments || []
-      const newComment = { id: Date.now().toString(), text: text.trim(), author: user?.full_name || 'Unknown', author_id: user?.id, created_at: new Date().toISOString() }
-      const updated = [newComment, ...existing]
-      await supabase.from('households').update({ comments: updated }).eq('id', selectedHousehold.id)
-      setSelectedHousehold(prev => ({ ...prev, comments: updated }))
-      setEditedData(prev => ({ ...prev, comments: updated }))
-    } catch (err) {
-      console.error('Comment error:', err)
-      alert('Failed to add comment: ' + err.message)
-    }
-  }
-
-  // Delete comment (admin only)
-  const handleDeleteComment = async (commentId) => {
-    if (!confirm('Delete this comment?')) return
-    try {
-      const existing = selectedHousehold.comments || []
-      const updated = existing.filter(c => c.id !== commentId)
-      await supabase.from('households').update({ comments: updated }).eq('id', selectedHousehold.id)
-      setSelectedHousehold(prev => ({ ...prev, comments: updated }))
-      setEditedData(prev => ({ ...prev, comments: updated }))
-    } catch (err) {
-      console.error('Delete comment error:', err)
-      alert('Failed to delete comment: ' + err.message)
-    }
-  }
-
   // Delete PAP
   const handleDeletePAP = async (pap) => {
     if (canApprove) {
@@ -909,10 +871,6 @@ export default function Dashboard() {
               <h1 style={{ color: 'white', fontSize: '18px', fontWeight: '700', margin: 0, letterSpacing: '-0.5px' }}>CIMS</h1>
               <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '11px', margin: 0 }}>Asset Registration & Verification</p>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '12px', paddingLeft: '12px', borderLeft: '1px solid rgba(255,255,255,0.2)' }}>
-              <img src="/logo-gol.png" alt="Government of Lesotho" style={{ height: '32px', objectFit: 'contain' }} onError={(e) => { e.target.style.display = 'none' }} />
-              <img src="/logo-afdb.png" alt="AfDB" style={{ height: '28px', objectFit: 'contain' }} onError={(e) => { e.target.style.display = 'none' }} />
-            </div>
             {selectedRoute && view !== 'routes' && (
               <div style={{ marginLeft: '8px', padding: '6px 14px', backgroundColor: colors.accent, borderRadius: '6px' }}>
                 <span style={{ color: colors.primaryDark, fontSize: '13px', fontWeight: '600' }}>{selectedRoute.name}</span>
@@ -925,7 +883,7 @@ export default function Dashboard() {
             <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.5)' }} />
             <input
               type="text"
-              placeholder="Search PAPs, routes, ID, phone..."
+              placeholder="Search all PAPs..."
               value={globalSearchQuery}
               onChange={(e) => { setGlobalSearchQuery(e.target.value); setShowGlobalSearch(true) }}
               onFocus={() => setShowGlobalSearch(true)}
@@ -989,7 +947,6 @@ export default function Dashboard() {
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {/* Notification Bell */}
-            {!isClient && (
             <div style={{ position: 'relative' }}>
               <button onClick={() => setShowNotifications(!showNotifications)} 
                 style={{ 
@@ -1126,7 +1083,6 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-            )}
             
             <div style={{ 
               width: '38px', height: '38px', borderRadius: '50%', 
@@ -1187,7 +1143,6 @@ export default function Dashboard() {
                   </div>
                   
                   {/* Export Button */}
-                  {!isClient && (
                   <button onClick={handleExportExcel} style={{ 
                     display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', 
                     backgroundColor: colors.primary, color: 'white', 
@@ -1198,7 +1153,6 @@ export default function Dashboard() {
                   onMouseOut={e => e.currentTarget.style.transform = 'none'}>
                     <Download size={18} /> Export to Excel
                   </button>
-                  )}
                 </div>
                 
                 {/* Progress Bar */}
@@ -1336,7 +1290,6 @@ export default function Dashboard() {
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    {!isClient && (
                     <button onClick={handleStartAddPAP} style={{
                       display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px',
                       backgroundColor: colors.accent, color: 'white', border: 'none',
@@ -1345,7 +1298,6 @@ export default function Dashboard() {
                     }}>
                       <Plus size={16} /> Add PAP
                     </button>
-                    )}
                     <div style={{ position: 'relative', width: '220px' }}>
                     <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
                     <input
@@ -1378,9 +1330,9 @@ export default function Dashboard() {
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ backgroundColor: colors.bgLight }}>
-                        {['PAP Name', 'File No.', 'Land Use', 'GPS', 'Status', ''].map((header, i) => (
+                        {['File No.', 'PAP Name', 'Land Use', 'CAF', 'Documents', 'Status', ''].map((header, i) => (
                           <th key={i} style={{ 
-                            padding: '14px 20px', textAlign: i === 5 ? 'right' : 'left', 
+                            padding: '14px 20px', textAlign: i === 6 ? 'right' : 'left', 
                             fontSize: '11px', fontWeight: '700', color: colors.textMuted, 
                             textTransform: 'uppercase', letterSpacing: '0.5px',
                             borderBottom: `1px solid ${colors.border}`
@@ -1394,6 +1346,7 @@ export default function Dashboard() {
                           style={{ cursor: 'pointer', borderBottom: `1px solid ${colors.border}`, transition: 'background-color 0.15s' }}
                           onMouseOver={(e) => e.currentTarget.style.backgroundColor = colors.bgLight}
                           onMouseOut={(e) => e.currentTarget.style.backgroundColor = colors.bgCard}>
+                          <td style={{ padding: '16px 20px', color: colors.textMuted, fontSize: '14px', fontWeight: '600' }}>{pap.file_number || '-'}</td>
                           <td style={{ padding: '16px 20px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                               <div style={{ 
@@ -1410,11 +1363,17 @@ export default function Dashboard() {
                               </span>
                             </div>
                           </td>
-                          <td style={{ padding: '16px 20px', color: colors.textMuted, fontSize: '14px' }}>{pap.file_number || '-'}</td>
                           <td style={{ padding: '16px 20px', color: colors.textMuted, fontSize: '14px' }}>{pap.land_use || '-'}</td>
                           <td style={{ padding: '16px 20px' }}>
-                            {pap.latitude ? (
+                            {pap.caf_document ? (
                               <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Yes</span>
+                            ) : (
+                              <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '16px 20px' }}>
+                            {pap.other_documents?.length > 0 ? (
+                              <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ {pap.other_documents.length}</span>
                             ) : (
                               <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
                             )}
@@ -1447,7 +1406,6 @@ export default function Dashboard() {
               editedData={editedData}
               editMode={editMode}
               isAdmin={isAdmin}
-              isClient={isClient}
               saving={saving}
               activeTab={activeTab}
               setActiveTab={setActiveTab}
@@ -1464,9 +1422,6 @@ export default function Dashboard() {
               onDeletePAP={handleDeletePAP}
               occupationOptions={occupationOptions}
               onPreviewDoc={setPreviewDoc}
-              onAddComment={handleAddComment}
-              onDeleteComment={handleDeleteComment}
-              user={user}
               onRefresh={async () => {
                 await loadData()
                 const { data: fresh } = await supabase.from('households').select('*').eq('id', selectedHousehold.id).single()
@@ -1686,10 +1641,9 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, isClient, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, onAddComment, onDeleteComment, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
-  const [commentText, setCommentText] = useState('')
   const data = editMode ? editedData : household
 
   return (
@@ -1725,7 +1679,7 @@ function DetailView({ household, editedData, editMode, isAdmin, isClient, saving
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          {!editMode && !isClient && (
+          {!editMode && (
             <button onClick={() => setEditMode(true)} style={{ 
               display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
               backgroundColor: colors.warning, color: 'white', 
@@ -1770,7 +1724,7 @@ function DetailView({ household, editedData, editMode, isAdmin, isClient, saving
           }} title="Refresh data">
             <RefreshCw size={16} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
           </button>
-          {!editMode && !isClient && (
+          {!editMode && (
             <button onClick={() => onDeletePAP(household)} style={{ 
               display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
               backgroundColor: colors.error, color: 'white', 
@@ -1859,43 +1813,6 @@ function DetailView({ household, editedData, editMode, isAdmin, isClient, saving
               ))}
             </Card>
           )}
-
-          {/* Comments Section */}
-          <Card title="Comments & Notes" icon={MessageCircle} color={colors.warning} colors={colors}>
-            {!isClient && (
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-                <input type="text" value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Add a comment or note..." onKeyDown={(e) => { if (e.key === 'Enter' && commentText.trim()) { onAddComment(commentText); setCommentText('') } }}
-                  style={{ flex: 1, padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
-                <button onClick={() => { if (commentText.trim()) { onAddComment(commentText); setCommentText('') } }}
-                  style={{ padding: '10px 16px', backgroundColor: colors.accent, color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: '600' }}>
-                  <Send size={14} /> Add
-                </button>
-              </div>
-            )}
-            {(data.comments && data.comments.length > 0) ? (
-              <div style={{ display: 'grid', gap: '8px', maxHeight: '300px', overflowY: 'auto' }}>
-                {data.comments.map((c) => (
-                  <div key={c.id} style={{ padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={{ flex: 1 }}>
-                        <p style={{ fontSize: '14px', color: colors.textDark, margin: '0 0 6px 0', lineHeight: '1.5' }}>{c.text}</p>
-                        <p style={{ fontSize: '11px', color: colors.textMuted, margin: 0 }}>
-                          <span style={{ fontWeight: '600' }}>{c.author}</span> • {new Date(c.created_at).toLocaleString()}
-                        </p>
-                      </div>
-                      {isAdmin && (
-                        <button onClick={() => onDeleteComment(c.id)} style={{ padding: '4px', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>
-                          <Trash2 size={14} color={colors.textLight} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p style={{ fontSize: '13px', color: colors.textLight, margin: 0, textAlign: 'center', padding: '12px 0' }}>No comments yet</p>
-            )}
-          </Card>
         </div>
       )}
 
@@ -1923,10 +1840,10 @@ function DetailView({ household, editedData, editMode, isAdmin, isClient, saving
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Compensation Agreement Form (CAF)" icon={FileText} color={colors.primary} colors={colors}>
-            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} readOnly={isClient} colors={colors} />
+            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} colors={colors} />
           </Card>
           <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
-            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={onPreviewDoc} readOnly={isClient} colors={colors} />
+            <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={onPreviewDoc} colors={colors} />
           </Card>
         </div>
       )}
@@ -2058,7 +1975,7 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
 }
 
 // Document Uploader component
-function DocumentUploader({ documents, onUpload, onDelete, onPreview, readOnly, colors }) {
+function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) {
   const [queue, setQueue] = useState([])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
@@ -2120,7 +2037,7 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, readOnly, 
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
                 <button onClick={() => onPreview?.(doc)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.accent}15`, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Eye size={16} color={colors.accent} /></button>
                 <a href={doc.url} download style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}><Download size={16} color={colors.primary} /></a>
-                {!readOnly && <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>}
+                <button onClick={() => onDelete(i)} style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#fee2e2', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 }}><Trash2 size={16} color="#ef4444" /></button>
               </div>
             </div>
           ))}
@@ -2164,7 +2081,6 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, readOnly, 
       )}
 
       {/* Action buttons */}
-      {!readOnly && (
       <div style={{ display: 'flex', gap: '10px' }}>
         <input ref={fileRef} type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
@@ -2175,13 +2091,12 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, readOnly, 
           <FileUp size={16} /> Add Folder
         </button>
       </div>
-      )}
     </div>
   )
 }
 
 // CAF Uploader component
-function CAFUploader({ caf, onUpload, onDelete, onPreview, readOnly, colors }) {
+function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
   const inputRef = useRef(null)
   return (
     <div>
@@ -2195,13 +2110,11 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, readOnly, colors }) {
           <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
             <button onClick={() => onPreview?.(caf)} style={{ padding: '8px 14px', backgroundColor: `${colors.accent}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.accent }}><Eye size={14} /> View</button>
             <a href={caf.url} download style={{ padding: '8px 14px', backgroundColor: `${colors.primary}15`, borderRadius: '8px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.primary }}><Download size={14} /> Download</a>
-            {!readOnly && <button onClick={() => inputRef.current?.click()} style={{ padding: '8px 14px', backgroundColor: `${colors.warning}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.warning }}><Upload size={14} /> Replace</button>}
-            {!readOnly && <button onClick={onDelete} style={{ padding: '8px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: '#ef4444' }}><Trash2 size={14} /> Delete</button>}
+            <button onClick={() => inputRef.current?.click()} style={{ padding: '8px 14px', backgroundColor: `${colors.warning}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.warning }}><Upload size={14} /> Replace</button>
+            <button onClick={onDelete} style={{ padding: '8px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: '#ef4444' }}><Trash2 size={14} /> Delete</button>
           </div>
           <input ref={inputRef} type="file" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} style={{ display: 'none' }} />
         </div>
-      ) : readOnly ? (
-        <p style={{ fontSize: '13px', color: colors.textLight, margin: 0, textAlign: 'center', padding: '20px 0' }}>No CAF uploaded</p>
       ) : (
         <div style={{ textAlign: 'center', padding: '30px 20px', border: `2px dashed ${colors.border}`, borderRadius: '12px', cursor: 'pointer' }} onClick={() => inputRef.current?.click()}>
           <Upload size={32} color={colors.textLight} style={{ opacity: 0.4, marginBottom: '8px' }} />
