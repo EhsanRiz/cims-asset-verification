@@ -1429,6 +1429,7 @@ export default function Dashboard() {
                 if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
               }}
               onPrint={handlePrint}
+              user={user}
               colors={colors}
             />
           )}
@@ -1641,8 +1642,105 @@ function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponen
   )
 }
 
+// Comments Section Component
+function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
+  const [comments, setComments] = useState(household.comments || [])
+  const [newComment, setNewComment] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setComments(household.comments || [])
+  }, [household.comments])
+
+  const handleAddComment = async () => {
+    if (!newComment.trim()) return
+    setSaving(true)
+    const comment = {
+      id: crypto.randomUUID(),
+      text: newComment.trim(),
+      author: user?.full_name || user?.username || 'Unknown',
+      author_id: user?.id,
+      created_at: new Date().toISOString(),
+    }
+    const updated = [...comments, comment]
+    const { error } = await supabase.from('households').update({ comments: updated }).eq('id', household.id)
+    if (!error) {
+      setComments(updated)
+      setNewComment('')
+      if (onRefresh) onRefresh()
+    }
+    setSaving(false)
+  }
+
+  const handleDeleteComment = async (commentId) => {
+    if (!confirm('Delete this comment?')) return
+    const updated = comments.filter(c => c.id !== commentId)
+    const { error } = await supabase.from('households').update({ comments: updated }).eq('id', household.id)
+    if (!error) {
+      setComments(updated)
+      if (onRefresh) onRefresh()
+    }
+  }
+
+  return (
+    <Card title="Comments & Notes" icon={FileText} color={colors.warning} colors={colors}>
+      {comments.length === 0 ? (
+        <p style={{ color: colors.textMuted, fontSize: '13px', textAlign: 'center', margin: '8px 0' }}>No comments yet</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+          {comments.map(c => (
+            <div key={c.id} style={{
+              padding: '12px 14px', backgroundColor: colors.bgLight,
+              borderRadius: '10px', border: `1px solid ${colors.border}`,
+              display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px'
+            }}>
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: 0, fontSize: '14px', color: colors.textDark }}>{c.text}</p>
+                <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: colors.textMuted }}>
+                  {c.author} • {new Date(c.created_at).toLocaleString()}
+                </p>
+              </div>
+              {isAdmin && (
+                <button onClick={() => handleDeleteComment(c.id)} style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
+                  color: colors.error, flexShrink: 0
+                }}>
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {user?.role !== 'client' && user?.role !== 'Client' && (
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <input
+            type="text"
+            value={newComment}
+            onChange={e => setNewComment(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAddComment()}
+            placeholder="Add a comment..."
+            style={{
+              flex: 1, padding: '10px 14px', border: `1px solid ${colors.border}`,
+              borderRadius: '8px', fontSize: '14px', outline: 'none',
+              backgroundColor: colors.bgCard
+            }}
+          />
+          <button onClick={handleAddComment} disabled={saving || !newComment.trim()} style={{
+            padding: '10px 18px', backgroundColor: colors.warning, color: 'white',
+            border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '600',
+            cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1
+          }}>
+            {saving ? 'Saving...' : 'Add'}
+          </button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const data = editMode ? editedData : household
@@ -1814,6 +1912,15 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               ))}
             </Card>
           )}
+
+          {/* Comments & Notes */}
+          <CommentsSection
+            household={household}
+            user={user}
+            isAdmin={isAdmin}
+            colors={colors}
+            onRefresh={onRefresh}
+          />
         </div>
       )}
 
