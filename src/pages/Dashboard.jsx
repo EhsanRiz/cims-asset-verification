@@ -772,6 +772,30 @@ export default function Dashboard() {
   }
 
   // Export to Excel function
+  const handleMovePAP = async (pap, newRoute) => {
+    try {
+      const { error } = await supabase
+        .from('households')
+        .update({
+          route_name: newRoute.name,
+          route_type: newRoute.type,
+          last_edited_by: user?.id,
+          last_edited_by_name: user?.full_name,
+          last_edited_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', pap.id)
+      if (error) throw error
+      await loadData()
+      const { data: fresh } = await supabase.from('households').select('*').eq('id', pap.id).single()
+      if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
+      alert(`✅ ${pap.household_head_first_name} ${pap.household_head_surname} moved to ${newRoute.name}`)
+    } catch (err) {
+      console.error('Move error:', err)
+      alert('Error moving PAP: ' + err.message)
+    }
+  }
+
   const handleExportExcel = () => {
     // Prepare data for export
     const exportData = households.map(h => ({
@@ -879,7 +903,7 @@ export default function Dashboard() {
           </div>
           
           {/* Global Search in Header */}
-          <div style={{ flex: 1, maxWidth: '400px', margin: '0 20px', position: 'relative' }}>
+          <div style={{ flex: 1, maxWidth: '400px', margin: '0 20px', position: 'relative', zIndex: 100 }}>
             <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.5)' }} />
             <input
               type="text"
@@ -1429,6 +1453,7 @@ export default function Dashboard() {
                 if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
               }}
               onPrint={handlePrint}
+              onMovePAP={handleMovePAP}
               user={user}
               colors={colors}
             />
@@ -1740,9 +1765,12 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
+  const [showMoveModal, setShowMoveModal] = useState(false)
+  const [selectedNewRoute, setSelectedNewRoute] = useState('')
+  const [moving, setMoving] = useState(false)
   const data = editMode ? editedData : household
 
   return (
@@ -1833,8 +1861,90 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
               <Trash2 size={16} /> {isAdmin ? 'Delete' : 'Request Delete'}
             </button>
           )}
+          {!editMode && (
+            <button onClick={() => { setSelectedNewRoute(''); setShowMoveModal(true) }} style={{ 
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
+              backgroundColor: colors.primary, color: 'white', 
+              border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)'
+            }}>
+              <ArrowRightLeft size={16} /> Move
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Move PAP Modal */}
+      {showMoveModal && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '440px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: '700', color: colors.textDark, margin: 0 }}>Move PAP to Another Route</h2>
+                <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>
+                  Currently in: <strong>{household.route_name}</strong>
+                </p>
+              </div>
+              <button onClick={() => setShowMoveModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} color={colors.textMuted} />
+              </button>
+            </div>
+            <div style={{ padding: '24px' }}>
+              <label style={{ fontSize: '13px', fontWeight: '600', color: colors.textDark, display: 'block', marginBottom: '8px' }}>
+                Select Destination Route
+              </label>
+              <select
+                value={selectedNewRoute}
+                onChange={e => setSelectedNewRoute(e.target.value)}
+                style={{
+                  width: '100%', padding: '12px 14px',
+                  border: `1px solid ${colors.border}`, borderRadius: '10px',
+                  fontSize: '14px', color: colors.textDark,
+                  backgroundColor: colors.bgCard, outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              >
+                <option value=''>— Select a route —</option>
+                {routes
+                  .filter(r => r.name !== household.route_name)
+                  .map(r => (
+                    <option key={r.name} value={r.name}>{r.name} ({r.type})</option>
+                  ))
+                }
+              </select>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                <button
+                  onClick={() => setShowMoveModal(false)}
+                  style={{
+                    flex: 1, padding: '12px', backgroundColor: colors.bgLight,
+                    border: `1px solid ${colors.border}`, borderRadius: '10px',
+                    fontSize: '14px', fontWeight: '600', cursor: 'pointer', color: colors.textDark
+                  }}>
+                  Cancel
+                </button>
+                <button
+                  disabled={!selectedNewRoute || moving}
+                  onClick={async () => {
+                    setMoving(true)
+                    const newRoute = routes.find(r => r.name === selectedNewRoute)
+                    await onMovePAP(household, newRoute)
+                    setMoving(false)
+                    setShowMoveModal(false)
+                  }}
+                  style={{
+                    flex: 1, padding: '12px',
+                    backgroundColor: selectedNewRoute ? colors.accent : colors.border,
+                    border: 'none', borderRadius: '10px',
+                    fontSize: '14px', fontWeight: '600', cursor: selectedNewRoute ? 'pointer' : 'not-allowed',
+                    color: 'white', opacity: moving ? 0.7 : 1
+                  }}>
+                  {moving ? 'Moving...' : 'Confirm Move'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ 
