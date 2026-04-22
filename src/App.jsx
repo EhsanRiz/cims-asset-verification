@@ -1,7 +1,9 @@
 import { useState, useEffect, createContext, useContext } from 'react'
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import Landing from './pages/Landing'
+import Collect from './pages/Collect'
 
 // Auth Context
 const AuthContext = createContext(null)
@@ -68,12 +70,24 @@ function AuthProvider({ children }) {
 
 function ProtectedRoute({ children }) {
   const { user } = useAuth()
-  
+
   if (!user) {
     return <Navigate to="/login" replace />
   }
-  
+
   return children
+}
+
+// Role-aware landing. Field users see the mode picker; admins/clients go straight to the dashboard.
+function RoleHome() {
+  const { user } = useAuth()
+  const role = (user?.role || '').toLowerCase()
+
+  if (role === 'user') {
+    return <Landing />
+  }
+  // admin, Admin, client, or anything else → full dashboard
+  return <Dashboard />
 }
 
 function App() {
@@ -82,13 +96,41 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route 
-            path="/*" 
+
+          <Route
+            path="/landing"
+            element={
+              <ProtectedRoute>
+                <Landing />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/collect"
+            element={
+              <ProtectedRoute>
+                <Collect />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/dashboard/*"
             element={
               <ProtectedRoute>
                 <Dashboard />
               </ProtectedRoute>
-            } 
+            }
+          />
+
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute>
+                <RoleHome />
+              </ProtectedRoute>
+            }
           />
         </Routes>
       </AuthProvider>
