@@ -4,8 +4,8 @@ import { useAuth } from '../App'
 import { supabase } from '../lib/supabase'
 import {
   MapPin, Home, Users, UserPlus, CreditCard, CheckCircle2, Camera,
-  Upload, Plus, Trash2, ArrowLeft, ArrowRight, LogOut, Check,
-  RefreshCw, Edit2, User
+  Upload, Plus, Trash2, ArrowLeft, ArrowRight, LogOut, Check, X,
+  RefreshCw, Edit2, User, Info
 } from 'lucide-react'
 
 // ---------- Styling ----------
@@ -94,6 +94,8 @@ export default function Collect() {
   const [routes, setRoutes] = useState([])
   const [routesLoading, setRoutesLoading] = useState(true)
   const [mySubs, setMySubs] = useState([])
+  const [listFilter, setListFilter] = useState('all') // all | pending | approved | rejected
+  const [toast, setToast] = useState(null) // { type, title, message }
 
   // Wizard state
   const [routeSel, setRouteSel] = useState('')
@@ -113,6 +115,62 @@ export default function Collect() {
     loadRoutes()
     loadMySubmissions()
   }, [])
+
+  // Realtime: when an admin approves/rejects one of this surveyor's registrations,
+  // refresh the list and pop a toast.
+  useEffect(() => {
+    if (!user?.id) return
+
+    const hhChannel = supabase
+      .channel(`my-households-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'households', filter: `created_by_user=eq.${user.id}` },
+        (payload) => {
+          loadMySubmissions()
+          const newRow = payload.new || {}
+          const oldRow = payload.old || {}
+          if (newRow.approval_status && newRow.approval_status !== oldRow.approval_status) {
+            const name = `${newRow.household_head_first_name || ''} ${newRow.household_head_surname || ''}`.trim()
+            if (newRow.approval_status === 'approved') {
+              setToast({ type: 'approval', title: 'Registration approved ✅', message: `${name} on ${newRow.route_name || 'route'} is now approved.` })
+            } else if (newRow.approval_status === 'rejected') {
+              setToast({ type: 'rejection', title: 'Registration not approved', message: `${name} was rejected. ${newRow.admin_notes ? 'Note: ' + newRow.admin_notes : 'Check with your supervisor.'}` })
+            }
+          }
+        }
+      )
+      .subscribe()
+
+    const notifChannel = supabase
+      .channel(`my-notifs-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        (payload) => {
+          const n = payload.new
+          if (!n) return
+          setToast({
+            type: n.type === 'approval' ? 'approval' : 'rejection',
+            title: n.title || (n.type === 'approval' ? 'Approved' : 'Update'),
+            message: n.message || '',
+          })
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(hhChannel)
+      supabase.removeChannel(notifChannel)
+    }
+  }, [user?.id])
+
+  // Auto-dismiss toast after 6 seconds
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [toast])
 
   function emptyHousehold() {
     return {
@@ -158,7 +216,7 @@ export default function Collect() {
     try {
       const { data } = await supabase
         .from('households')
-        .select('id, household_head_first_name, household_head_surname, hh_residential_village, route_name, approval_status, created_at')
+        .select('id, household_head_first_name, household_head_surname, hh_residential_village, route_name, approval_status, admin_notes, file_number, created_at')
         .eq('created_by_user', user.id)
         .order('created_at', { ascending: false })
         .limit(50)
@@ -319,9 +377,9 @@ export default function Collect() {
         if (bkErr) throw bkErr
       }
 
-      // Notify admins
+      // Notify approvers (admins + Mamokuena). The Dashboard already listens for user_role='approver'.
       await supabase.from('notifications').insert({
-        user_role: 'admin',
+        user_role: 'approver',
         type: 'new_registration',
         title: 'New PAP Registration',
         message: `${user?.full_name || user?.username} registered ${hh.household_head_first_name} ${hh.household_head_surname} on ${routeSel}`,
@@ -345,6 +403,10 @@ export default function Collect() {
     return <MyFieldDashboard
       user={user}
       mySubs={mySubs}
+      filter={listFilter}
+      onFilterChange={setListFilter}
+      toast={toast}
+      onDismissToast={() => setToast(null)}
       onStart={goToWizard}
       onRefresh={loadMySubmissions}
       onLogout={() => { logout(); navigate('/login') }}
@@ -490,19 +552,24 @@ function StepStrip({ step }) {
 }
 
 // -------- My Field Dashboard (shows surveyor's registrations + Register button) --------
-function MyFieldDashboard({ user, mySubs, onStart, onRefresh, onLogout, onBackToLanding }) {
+function MyFieldDashboard({ user, mySubs, filter, onFilterChange, toast, onDismissToast, onStart, onRefresh, onLogout, onBackToLanding }) {
   const stats = {
     total: mySubs.length,
     pending: mySubs.filter(m => m.approval_status === 'pending' || !m.approval_status).length,
     approved: mySubs.filter(m => m.approval_status === 'approved').length,
     rejected: mySubs.filter(m => m.approval_status === 'rejected').length,
   }
+  const filtered = filter === 'all'
+    ? mySubs
+    : mySubs.filter(m => (m.approval_status || 'pending') === filter)
+  const filterLabels = { all: 'All Submissions', pending: 'Pending Review', approved: 'Approved', rejected: 'Rejected' }
+
   return (
     <div style={s.page}>
       <div style={s.topBar}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, color: c.textDark }}>Field Registrations</h1>
-          <div style={{ fontSize: 13, color: c.textMuted }}>View and manage your household registrations</div>
+          <h1 style={{ margin: 0, fontSize: 22, color: c.textDark }}>PAP Registrations</h1>
+          <div style={{ fontSize: 13, color: c.textMuted }}>View and manage your PAP registrations</div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 13, color: c.textMuted }}>{user?.full_name || user?.username} <span style={{ color: c.accent, fontWeight: 600 }}>(Surveyor)</span></span>
@@ -513,22 +580,55 @@ function MyFieldDashboard({ user, mySubs, onStart, onRefresh, onLogout, onBackTo
         </div>
       </div>
 
+      {/* Toast for live approval events */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 70, right: 20, zIndex: 2000,
+          background: toast.type === 'approval' ? '#ecfdf5' : '#fef2f2',
+          border: `1px solid ${toast.type === 'approval' ? '#a7f3d0' : '#fecaca'}`,
+          color: toast.type === 'approval' ? '#065f46' : '#991b1b',
+          padding: '12px 16px', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+          maxWidth: 360, display: 'flex', gap: 10, alignItems: 'flex-start',
+        }}>
+          {toast.type === 'approval' ? <Check size={18} /> : <X size={18} />}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>{toast.title}</div>
+            <div style={{ fontSize: 12, marginTop: 2, opacity: 0.85 }}>{toast.message}</div>
+          </div>
+          <button onClick={onDismissToast} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', opacity: 0.6 }}>×</button>
+        </div>
+      )}
+
       <div style={{ ...s.container, maxWidth: 1100 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 12, marginBottom: 16 }}>
-          <StatCard label="Total Submissions" value={stats.total} color={c.blue} />
-          <StatCard label="Pending Review" value={stats.pending} color={c.warning} />
-          <StatCard label="Approved" value={stats.approved} color={c.success} />
-          <StatCard label="Rejected" value={stats.rejected} color={c.error} />
+          <StatCard label="Total Submissions" value={stats.total} color={c.blue} active={filter === 'all'} onClick={() => onFilterChange('all')} />
+          <StatCard label="Pending Review" value={stats.pending} color={c.warning} active={filter === 'pending'} onClick={() => onFilterChange('pending')} />
+          <StatCard label="Approved" value={stats.approved} color={c.success} active={filter === 'approved'} onClick={() => onFilterChange('approved')} />
+          <StatCard label="Rejected" value={stats.rejected} color={c.error} active={filter === 'rejected'} onClick={() => onFilterChange('rejected')} />
         </div>
 
         <div style={s.card}>
-          <h3 style={{ margin: '0 0 14px', fontSize: 16 }}>My Household Registrations ({mySubs.length})</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>
+              {filterLabels[filter]} ({filtered.length})
+            </h3>
+            {filter !== 'all' && (
+              <button onClick={() => onFilterChange('all')} style={{
+                background: 'none', border: `1px solid ${c.border}`, borderRadius: 6,
+                padding: '4px 10px', fontSize: 12, color: c.textMuted, cursor: 'pointer',
+              }}>Clear filter</button>
+            )}
+          </div>
           {mySubs.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 40, color: c.textMuted }}>
               <Users size={44} color={c.textMuted} style={{ margin: '0 auto 10px', display: 'block' }} />
               <div style={{ fontWeight: 600, color: c.textDark, marginBottom: 4 }}>No households registered yet</div>
               <div style={{ fontSize: 13, marginBottom: 16 }}>Start by registering your first household.</div>
               <button onClick={onStart} style={s.btn(c.accent)}><Plus size={16} /> Register Your First Household</button>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 30, color: c.textMuted, fontSize: 13 }}>
+              No registrations in <strong>{filterLabels[filter]}</strong>.
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -543,14 +643,27 @@ function MyFieldDashboard({ user, mySubs, onStart, onRefresh, onLogout, onBackTo
                   </tr>
                 </thead>
                 <tbody>
-                  {mySubs.map(r => (
+                  {filtered.map(r => (
                     <tr key={r.id} style={{ borderBottom: `1px solid ${c.border}` }}>
                       <td style={{ padding: 10, fontWeight: 600 }}>
                         {r.household_head_first_name} {r.household_head_surname}
                       </td>
                       <td style={{ padding: 10 }}>{r.hh_residential_village || '—'}</td>
                       <td style={{ padding: 10 }}>{r.route_name || '—'}</td>
-                      <td style={{ padding: 10 }}><StatusPill status={r.approval_status} /></td>
+                      <td style={{ padding: 10 }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <StatusPill status={r.approval_status} />
+                          {r.approval_status === 'rejected' && r.admin_notes && (
+                            <span
+                              title={`Reason: ${r.admin_notes}`}
+                              style={{ display: 'inline-flex', color: c.error, cursor: 'help' }}
+                              aria-label={`Rejection reason: ${r.admin_notes}`}
+                            >
+                              <Info size={14} />
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td style={{ padding: 10, color: c.textMuted }}>{r.created_at ? new Date(r.created_at).toLocaleDateString() : '—'}</td>
                     </tr>
                   ))}
@@ -564,9 +677,25 @@ function MyFieldDashboard({ user, mySubs, onStart, onRefresh, onLogout, onBackTo
   )
 }
 
-function StatCard({ label, value, color }) {
+function StatCard({ label, value, color, active, onClick }) {
+  const clickable = typeof onClick === 'function'
   return (
-    <div style={{ ...s.card, margin: 0, borderLeft: `4px solid ${color}` }}>
+    <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+      style={{
+        ...s.card,
+        margin: 0,
+        borderLeft: `4px solid ${color}`,
+        cursor: clickable ? 'pointer' : 'default',
+        transition: 'all 0.15s ease',
+        outline: 'none',
+        boxShadow: active ? `0 0 0 2px ${color}, 0 4px 18px rgba(15,42,54,0.08)` : '0 4px 18px rgba(15,42,54,0.06)',
+        background: active ? `${color}10` : c.bgCard,
+      }}
+    >
       <div style={{ fontSize: 13, color: c.textMuted, fontWeight: 500 }}>{label}</div>
       <div style={{ fontSize: 30, fontWeight: 700, color: c.textDark, marginTop: 6 }}>{value}</div>
     </div>

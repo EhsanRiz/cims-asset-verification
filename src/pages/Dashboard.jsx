@@ -81,6 +81,7 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([])
   const [showNotifications, setShowNotifications] = useState(false)
   const [pendingApprovals, setPendingApprovals] = useState([])
+  const [pendingRegistrations, setPendingRegistrations] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
 
   // Add PAP state
@@ -104,6 +105,7 @@ export default function Dashboard() {
     // Real-time subscriptions
     const ch1 = supabase.channel('households-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, () => {
       loadData()
+      loadNotifications()
     }).subscribe()
     const ch2 = supabase.channel('edit-requests-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'edit_requests' }, () => loadNotifications()).subscribe()
     const ch3 = supabase.channel('notifications-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => loadNotifications()).subscribe()
@@ -139,10 +141,19 @@ export default function Dashboard() {
           .select('*, households(household_head_first_name, household_head_surname, route_name)')
           .eq('status', 'pending')
           .order('created_at', { ascending: false })
-        
+
         if (pendingData) {
           setPendingApprovals(pendingData)
         }
+
+        // Pending NEW PAP registrations from field surveyors (Mpho, etc.)
+        const { data: regsData } = await supabase
+          .from('households')
+          .select('id, household_head_first_name, household_head_surname, route_name, hh_residential_village, submitted_by, submitted_at, created_at, created_by_user, approval_status')
+          .eq('approval_status', 'pending')
+          .not('created_by_user', 'is', null)
+          .order('created_at', { ascending: false })
+        if (regsData) setPendingRegistrations(regsData)
       }
 
       // Check for approval notifications for regular users
@@ -536,6 +547,56 @@ export default function Dashboard() {
       alert(approved ? '✅ Changes approved and applied!' : '❌ Request rejected')
     } catch (err) {
       console.error('Approval error:', err)
+      alert('Error: ' + err.message)
+    }
+  }
+
+  // Handle approval/rejection of a NEW PAP registration submitted by a field surveyor
+  const handleRegistrationApproval = async (reg, approved, reason = '', fileNumber = '') => {
+    try {
+      const nowIso = new Date().toISOString()
+      const updates = {
+        approval_status: approved ? 'approved' : 'rejected',
+        pending_approval: false,
+        reviewed_by: user?.id,
+        reviewed_at: nowIso,
+      }
+      if (approved) {
+        updates.verification_status = 'verified'
+        updates.verified_by = user?.id
+        updates.verified_at = nowIso
+      }
+      if (reason) updates.admin_notes = reason
+      if (approved && fileNumber && fileNumber.trim()) {
+        updates.file_number = fileNumber.trim()
+      }
+
+      const { error } = await supabase
+        .from('households')
+        .update(updates)
+        .eq('id', reg.id)
+      if (error) throw error
+
+      // Notify the surveyor who submitted it
+      if (reg.created_by_user) {
+        const fileNumberNote = approved && fileNumber && fileNumber.trim()
+          ? ` File number: ${fileNumber.trim()}.`
+          : ''
+        await supabase.from('notifications').insert({
+          user_id: reg.created_by_user,
+          type: approved ? 'approval' : 'rejection',
+          title: approved ? 'PAP Registration Approved ✅' : 'PAP Registration Not Approved',
+          message: `${reg.household_head_first_name} ${reg.household_head_surname} on ${reg.route_name || 'route'} was ${approved ? 'approved' : 'rejected'} by ${user?.full_name || user?.username}${reason ? ' — ' + reason : ''}.${fileNumberNote}`,
+          reference_type: 'household',
+          reference_id: reg.id,
+        })
+      }
+
+      await loadData()
+      await loadNotifications()
+      alert(approved ? '✅ Registration approved!' : '❌ Registration rejected')
+    } catch (err) {
+      console.error('Registration approval error:', err)
       alert('Error: ' + err.message)
     }
   }
@@ -981,8 +1042,8 @@ export default function Dashboard() {
                 onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
                 onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
                 <Bell size={18} />
-                {(unreadCount > 0 || pendingApprovals.length > 0) && (
-                  <span style={{ 
+                {(unreadCount > 0 || pendingApprovals.length > 0 || pendingRegistrations.length > 0) && (
+                  <span style={{
                     position: 'absolute', top: '-4px', right: '-4px',
                     backgroundColor: colors.error, color: 'white',
                     fontSize: '10px', fontWeight: '700',
@@ -990,7 +1051,7 @@ export default function Dashboard() {
                     borderRadius: '9px', display: 'flex',
                     alignItems: 'center', justifyContent: 'center'
                   }}>
-                    {unreadCount + pendingApprovals.length}
+                    {unreadCount + pendingApprovals.length + pendingRegistrations.length}
                   </span>
                 )}
               </button>
@@ -1065,7 +1126,67 @@ export default function Dashboard() {
                       ))}
                     </div>
                   )}
-                  
+
+                  {/* NEW PAP Registrations from field surveyors */}
+                  {canApprove && pendingRegistrations.length > 0 && (
+                    <div style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <div style={{ padding: '10px 16px', backgroundColor: `${colors.accent}15` }}>
+                        <span style={{ fontSize: '12px', fontWeight: '700', color: colors.accent }}>
+                          🆕 NEW PAP REGISTRATIONS ({pendingRegistrations.length})
+                        </span>
+                      </div>
+                      {pendingRegistrations.slice(0, 5).map(reg => (
+                        <div key={reg.id} style={{
+                          padding: '12px 16px', borderBottom: `1px solid ${colors.border}`,
+                          backgroundColor: colors.bgLight
+                        }}>
+                          <button
+                            onClick={() => {
+                              setShowNotifications(false)
+                              handleSelectPAP(reg)
+                            }}
+                            style={{
+                              background: 'none', border: 'none', padding: 0,
+                              textAlign: 'left', cursor: 'pointer', width: '100%',
+                            }}
+                            title="Click to preview full registration"
+                          >
+                            <p style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: colors.primary, textDecoration: 'underline' }}>
+                              {reg.household_head_first_name} {reg.household_head_surname}
+                            </p>
+                            <p style={{ margin: '4px 0 8px 0', fontSize: '12px', color: colors.textMuted }}>
+                              Registered by {reg.submitted_by || '—'} • {reg.route_name || '—'} • {reg.hh_residential_village || '—'}
+                            </p>
+                          </button>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={() => {
+                              const fileNo = prompt(`Assign file number for ${reg.household_head_first_name} ${reg.household_head_surname} (optional — leave blank to skip):`)
+                              if (fileNo === null) return // cancelled
+                              handleRegistrationApproval(reg, true, '', fileNo.trim())
+                            }} style={{
+                              flex: 1, padding: '6px 12px', backgroundColor: colors.success,
+                              color: 'white', border: 'none', borderRadius: '6px',
+                              fontSize: '12px', fontWeight: '600', cursor: 'pointer'
+                            }}>
+                              ✓ Approve
+                            </button>
+                            <button onClick={() => {
+                              const reason = prompt('Reason for rejection (optional):')
+                              if (reason === null) return // cancelled
+                              handleRegistrationApproval(reg, false, reason || '')
+                            }} style={{
+                              flex: 1, padding: '6px 12px', backgroundColor: colors.error,
+                              color: 'white', border: 'none', borderRadius: '6px',
+                              fontSize: '12px', fontWeight: '600', cursor: 'pointer'
+                            }}>
+                              ✕ Reject
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Regular Notifications */}
                   {notifications.length > 0 ? (
                     notifications.slice(0, 10).map(notif => (
@@ -1097,7 +1218,7 @@ export default function Dashboard() {
                       </div>
                     ))
                   ) : (
-                    !canApprove || pendingApprovals.length === 0 ? (
+                    !canApprove || (pendingApprovals.length === 0 && pendingRegistrations.length === 0) ? (
                       <div style={{ padding: '30px', textAlign: 'center', color: colors.textMuted }}>
                         <Bell size={32} style={{ opacity: 0.3 }} />
                         <p style={{ marginTop: '8px', fontSize: '13px' }}>No notifications</p>
@@ -1426,8 +1547,91 @@ export default function Dashboard() {
 
           {/* PAP DETAIL VIEW */}
           {view === 'detail' && selectedHousehold && (
-            <DetailView
-              household={selectedHousehold}
+            <>
+              {/* Pending-approval banner — only when an approver is previewing a new surveyor-submitted PAP */}
+              {canApprove && selectedHousehold.approval_status === 'pending' && selectedHousehold.created_by_user && (
+                <div style={{
+                  margin: '16px 20px 0 20px',
+                  padding: '16px 20px',
+                  borderRadius: 12,
+                  background: 'linear-gradient(135deg, #fef9c3 0%, #fef3c7 100%)',
+                  border: '2px solid #f59e0b',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  boxShadow: '0 4px 12px rgba(245,158,11,0.15)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                    <div style={{
+                      width: 40, height: 40, borderRadius: 10,
+                      background: '#f59e0b', color: '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <Clock size={20} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#78350f' }}>
+                        New field registration — awaiting your approval
+                      </div>
+                      <div style={{ fontSize: 12, color: '#92400e', marginTop: 2 }}>
+                        Submitted by a field surveyor on {selectedHousehold.created_at ? new Date(selectedHousehold.created_at).toLocaleString() : 'unknown date'}. Review the details below, then approve or reject.
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                    <button
+                      onClick={() => {
+                        const fileNo = prompt(`Assign file number for ${selectedHousehold.household_head_first_name} ${selectedHousehold.household_head_surname} (optional — leave blank to skip):`)
+                        if (fileNo === null) return
+                        handleRegistrationApproval(selectedHousehold, true, '', fileNo.trim())
+                      }}
+                      style={{
+                        padding: '10px 16px',
+                        background: '#16a34a',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        boxShadow: '0 2px 6px rgba(22,163,74,0.3)',
+                      }}
+                    >
+                      <Check size={16} /> Approve
+                    </button>
+                    <button
+                      onClick={() => {
+                        const reason = prompt('Reason for rejection (shown to the surveyor):')
+                        if (reason === null) return
+                        handleRegistrationApproval(selectedHousehold, false, reason || '')
+                      }}
+                      style={{
+                        padding: '10px 16px',
+                        background: '#fff',
+                        color: '#b91c1c',
+                        border: '2px solid #fca5a5',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <XCircle size={16} /> Reject
+                    </button>
+                  </div>
+                </div>
+              )}
+              <DetailView
+                household={selectedHousehold}
               editedData={editedData}
               editMode={editMode}
               isAdmin={isAdmin}
@@ -1457,6 +1661,7 @@ export default function Dashboard() {
               user={user}
               colors={colors}
             />
+            </>
           )}
         </div>
       {/* Add PAP Modal */}

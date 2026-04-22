@@ -1,6 +1,8 @@
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, Users, LogOut, MapPin, Database } from 'lucide-react'
+import { ClipboardList, Users, LogOut, MapPin, Database, Bell } from 'lucide-react'
 import { useAuth } from '../App'
+import { supabase } from '../lib/supabase'
 
 const colors = {
   primary: '#1a3a4a',
@@ -15,6 +17,33 @@ const colors = {
 export default function Landing() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [pendingCount, setPendingCount] = useState(0)
+
+  // Approvers: admins + Mamokuena (who is role='user' with the special override)
+  const isApprover =
+    user?.role?.toLowerCase() === 'admin' ||
+    (user?.full_name || '').toLowerCase().includes('mamokuena') ||
+    (user?.username || '').toLowerCase().includes('mamokuena')
+
+  useEffect(() => {
+    if (!isApprover) return
+    let active = true
+    const loadCount = async () => {
+      const { count } = await supabase
+        .from('households')
+        .select('id', { count: 'exact', head: true })
+        .eq('approval_status', 'pending')
+        .not('created_by_user', 'is', null)
+      if (active && typeof count === 'number') setPendingCount(count)
+    }
+    loadCount()
+    // Live refresh so the badge stays current without a manual reload
+    const ch = supabase
+      .channel('landing-pending-count')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'households' }, loadCount)
+      .subscribe()
+    return () => { active = false; supabase.removeChannel(ch) }
+  }, [isApprover])
 
   const handleLogout = () => {
     logout()
@@ -220,6 +249,24 @@ export default function Landing() {
               <p style={{ color: colors.muted, fontSize: 14, margin: 0, lineHeight: 1.5 }}>
                 Browse the full PAP database by route, add documents to existing records, and update household information.
               </p>
+              {isApprover && pendingCount > 0 && (
+                <div style={{
+                  marginTop: 12,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: '#fef2f2',
+                  color: '#991b1b',
+                  border: '1px solid #fecaca',
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}>
+                  <Bell size={12} />
+                  {pendingCount} pending approval{pendingCount === 1 ? '' : 's'}
+                </div>
+              )}
             </div>
             <div style={{
               marginTop: 'auto',
