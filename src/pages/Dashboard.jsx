@@ -571,6 +571,39 @@ export default function Dashboard() {
   }
 
   // Handle approval/rejection of a NEW PAP registration submitted by a field surveyor
+  // Infer route code (e.g. "3006") for a route name from existing file_numbers
+  // shaped like "LLWDSP III-3006-007". Returns the most-frequent code, or null.
+  const inferRouteCode = (routeName) => {
+    if (!routeName) return null
+    const codeCounts = {}
+    households.forEach(h => {
+      if (h.route_name === routeName && h.file_number) {
+        const m = h.file_number.match(/^LLWDSP\s+III-(\d+)-/i)
+        if (m) codeCounts[m[1]] = (codeCounts[m[1]] || 0) + 1
+      }
+    })
+    const ranked = Object.entries(codeCounts).sort((a, b) => b[1] - a[1])
+    return ranked[0]?.[0] || null
+  }
+
+  // Compute next sequence number for a given route code, scanning existing
+  // file_numbers within that code and returning a 3-digit zero-padded string.
+  const nextFileNumber = (routeCode) => {
+    if (!routeCode) return null
+    let max = 0
+    const re = new RegExp(`^LLWDSP\\s+III-${routeCode}-(\\d+)`, 'i')
+    households.forEach(h => {
+      if (h.file_number) {
+        const m = h.file_number.match(re)
+        if (m) {
+          const n = parseInt(m[1], 10)
+          if (!isNaN(n) && n > max) max = n
+        }
+      }
+    })
+    return `LLWDSP III-${routeCode}-${String(max + 1).padStart(3, '0')}`
+  }
+
   const handleRegistrationApproval = async (reg, approved, reason = '', fileNumber = '') => {
     try {
       const nowIso = new Date().toISOString()
@@ -586,8 +619,21 @@ export default function Dashboard() {
         updates.verified_at = nowIso
       }
       if (reason) updates.admin_notes = reason
-      if (approved && fileNumber && fileNumber.trim()) {
-        updates.file_number = fileNumber.trim()
+      let assignedFileNumber = null
+      if (approved) {
+        const trimmedManual = fileNumber?.trim()
+        if (trimmedManual) {
+          updates.file_number = trimmedManual
+          assignedFileNumber = trimmedManual
+        } else if (!reg.file_number) {
+          // Auto-generate only when no file_number exists yet
+          const code = reg.route_code || inferRouteCode(reg.route_name)
+          const generated = nextFileNumber(code)
+          if (generated) {
+            updates.file_number = generated
+            assignedFileNumber = generated
+          }
+        }
       }
 
       const { error } = await supabase
@@ -598,8 +644,8 @@ export default function Dashboard() {
 
       // Notify the surveyor who submitted it
       if (reg.created_by_user) {
-        const fileNumberNote = approved && fileNumber && fileNumber.trim()
-          ? ` File number: ${fileNumber.trim()}.`
+        const fileNumberNote = approved && assignedFileNumber
+          ? ` File number: ${assignedFileNumber}.`
           : ''
         await supabase.from('notifications').insert({
           user_id: reg.created_by_user,
@@ -922,6 +968,13 @@ export default function Dashboard() {
       Object.keys(record).forEach(k => { if (record[k] === '') record[k] = null })
       const numericFields = ['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp', 'disturbance_allowance', 'total_compensation', 'latitude', 'longitude']
       numericFields.forEach(f => { record[f] = record[f] === '' || record[f] == null ? null : (parseFloat(record[f]) || null) })
+
+      // Auto-generate file_number when admin leaves it blank
+      if (!record.file_number) {
+        const code = record.route_code || inferRouteCode(record.route_name)
+        const generated = nextFileNumber(code)
+        if (generated) record.file_number = generated
+      }
 
       const { data: inserted, error } = await supabase.from('households').insert(record).select().single()
       if (error) throw error
@@ -1270,7 +1323,7 @@ export default function Dashboard() {
                           </button>
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <button onClick={() => {
-                              const fileNo = prompt(`Assign file number for ${reg.household_head_first_name} ${reg.household_head_surname} (optional — leave blank to skip):`)
+                              const fileNo = prompt(`Assign file number for ${reg.household_head_first_name} ${reg.household_head_surname} (leave blank to auto-generate):`)
                               if (fileNo === null) return // cancelled
                               handleRegistrationApproval(reg, true, '', fileNo.trim())
                             }} style={{
@@ -1705,7 +1758,7 @@ export default function Dashboard() {
                   <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                     <button
                       onClick={() => {
-                        const fileNo = prompt(`Assign file number for ${selectedHousehold.household_head_first_name} ${selectedHousehold.household_head_surname} (optional — leave blank to skip):`)
+                        const fileNo = prompt(`Assign file number for ${selectedHousehold.household_head_first_name} ${selectedHousehold.household_head_surname} (leave blank to auto-generate):`)
                         if (fileNo === null) return
                         handleRegistrationApproval(selectedHousehold, true, '', fileNo.trim())
                       }}
