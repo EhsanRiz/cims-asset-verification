@@ -62,6 +62,7 @@ export default function Dashboard() {
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [selectedHousehold, setSelectedHousehold] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [listFilter, setListFilter] = useState(null) // null | 'all' | 'paid'
   
   // Global search state
   const [globalSearchQuery, setGlobalSearchQuery] = useState('')
@@ -287,7 +288,7 @@ export default function Dashboard() {
     total: households.length,
     routes: routes.length,
     verified: households.filter(h => h.verification_status?.toLowerCase() === 'verified' || h.approval_status === 'approved').length,
-    withGPS: households.filter(h => h.latitude && h.longitude).length
+    paid: households.filter(h => h.payment_status === 'paid').length
   }
 
   // Progress calculation
@@ -303,26 +304,32 @@ export default function Dashboard() {
   const ruralRoutes = routes.filter(r => r.type === 'Rural')
   const urbanRoutes = routes.filter(r => r.type === 'Urban')
 
-  const filteredPAPs = selectedRoute 
-    ? households.filter(h => {
-        if (h.route_name !== selectedRoute.name) return false
-        if (!searchQuery) return true
-        const search = searchQuery.toLowerCase()
-        return (
-          h.household_head_first_name?.toLowerCase().includes(search) ||
-          h.household_head_surname?.toLowerCase().includes(search) ||
-          h.id_number?.toLowerCase().includes(search) ||
-          h.file_number?.toLowerCase().includes(search)
-        )
-      }).sort((a, b) => {
-        const fa = a.file_number || ''
-        const fb = b.file_number || ''
-        return fa.localeCompare(fb, undefined, { numeric: true, sensitivity: 'base' })
-      })
-    : []
+  const matchesSearch = (h) => {
+    if (!searchQuery) return true
+    const search = searchQuery.toLowerCase()
+    return (
+      h.household_head_first_name?.toLowerCase().includes(search) ||
+      h.household_head_surname?.toLowerCase().includes(search) ||
+      h.id_number?.toLowerCase().includes(search) ||
+      h.file_number?.toLowerCase().includes(search)
+    )
+  }
+  const sortByFileNumber = (a, b) => {
+    const fa = a.file_number || ''
+    const fb = b.file_number || ''
+    return fa.localeCompare(fb, undefined, { numeric: true, sensitivity: 'base' })
+  }
+  const filteredPAPs = selectedRoute
+    ? households.filter(h => h.route_name === selectedRoute.name && matchesSearch(h)).sort(sortByFileNumber)
+    : listFilter === 'all'
+      ? households.filter(matchesSearch).sort(sortByFileNumber)
+      : listFilter === 'paid'
+        ? households.filter(h => h.payment_status === 'paid' && matchesSearch(h)).sort(sortByFileNumber)
+        : []
 
   const handleSelectRoute = (route) => {
     setSelectedRoute(route)
+    setListFilter(null)
     setSearchQuery('')
     setView('paps')
   }
@@ -345,8 +352,20 @@ export default function Dashboard() {
       setView('paps')
     } else if (view === 'paps') {
       setSelectedRoute(null)
+      setListFilter(null)
       setView('routes')
     }
+  }
+
+  const openPAPList = (filter) => {
+    setSelectedRoute(null)
+    setListFilter(filter)
+    setSearchQuery('')
+    setView('paps')
+  }
+
+  const scrollToRoutes = () => {
+    document.getElementById('routes-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const handleFieldChange = (field, value) => {
@@ -961,6 +980,11 @@ export default function Dashboard() {
                 <span style={{ color: colors.primaryDark, fontSize: '13px', fontWeight: '600' }}>{selectedRoute.name}</span>
               </div>
             )}
+            {!selectedRoute && listFilter && view !== 'routes' && (
+              <div style={{ marginLeft: '8px', padding: '6px 14px', backgroundColor: colors.accent, borderRadius: '6px' }}>
+                <span style={{ color: colors.primaryDark, fontSize: '13px', fontWeight: '600' }}>{listFilter === 'paid' ? 'PAPs Paid' : 'All PAPs'}</span>
+              </div>
+            )}
           </div>
           
           {/* Global Search in Header */}
@@ -1322,19 +1346,20 @@ export default function Dashboard() {
 
               {/* Stats Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-                <StatCard label="Total PAPs" value={stats.total} color={colors.primary} icon={Users} />
-                <StatCard label="Routes" value={stats.routes} color={colors.accent} iconComponent={MapIcon} />
+                <StatCard label="Total PAPs" value={stats.total} color={colors.primary} icon={Users} onClick={() => openPAPList('all')} />
+                <StatCard label="Routes" value={stats.routes} color={colors.accent} iconComponent={MapIcon} onClick={scrollToRoutes} />
                 <StatCard label="Verified" value={stats.verified} color={colors.success} icon={Check} />
-                <StatCard label="With GPS" value={stats.withGPS} color={colors.warning} icon={MapPin} />
+                <StatCard label="PAPs Paid" value={stats.paid} color={colors.warning} icon={CreditCard} onClick={() => openPAPList('paid')} />
               </div>
 
               {/* Routes Card */}
-              <div style={{ 
-                backgroundColor: colors.bgCard, 
-                borderRadius: '16px', 
-                padding: '24px', 
+              <div id="routes-section" style={{
+                backgroundColor: colors.bgCard,
+                borderRadius: '16px',
+                padding: '24px',
                 border: `1px solid ${colors.border}`,
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                scrollMarginTop: '16px'
               }}>
                 <h2 style={{ 
                   fontSize: '18px', fontWeight: '700', color: colors.textDark, 
@@ -1411,49 +1436,54 @@ export default function Dashboard() {
           )}
 
           {/* PAPS LIST VIEW */}
-          {view === 'paps' && selectedRoute && (
-            <div style={{ 
-              backgroundColor: colors.bgCard, 
-              borderRadius: '16px', 
-              border: `1px solid ${colors.border}`, 
+          {view === 'paps' && (selectedRoute || listFilter) && (() => {
+            const listMeta = selectedRoute
+              ? { title: selectedRoute.name, subLabel: selectedRoute.type, subColor: selectedRoute.type === 'Rural' ? colors.rural : colors.urban, searchPlaceholder: 'Search PAPs in this route...' }
+              : listFilter === 'paid'
+                ? { title: 'PAPs Paid', subLabel: 'Payment received', subColor: colors.warning, searchPlaceholder: 'Search paid PAPs...' }
+                : { title: 'All PAPs', subLabel: 'Across all routes', subColor: colors.primary, searchPlaceholder: 'Search all PAPs...' }
+            return (
+            <div style={{
+              backgroundColor: colors.bgCard,
+              borderRadius: '16px',
+              border: `1px solid ${colors.border}`,
               overflow: 'hidden',
               boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
             }}>
-              <div style={{ 
-                padding: '20px 24px', 
-                borderBottom: `1px solid ${colors.border}`, 
+              <div style={{
+                padding: '20px 24px',
+                borderBottom: `1px solid ${colors.border}`,
                 background: `linear-gradient(135deg, ${colors.bgLight} 0%, ${colors.bgCard} 100%)`
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
                   <div>
-                    <h2 style={{ fontSize: '20px', fontWeight: '700', color: colors.textDark, margin: 0 }}>{selectedRoute.name}</h2>
+                    <h2 style={{ fontSize: '20px', fontWeight: '700', color: colors.textDark, margin: 0 }}>{listMeta.title}</h2>
                     <p style={{ fontSize: '14px', color: colors.textMuted, margin: '4px 0 0 0' }}>
-                      <span style={{ 
-                        color: selectedRoute.type === 'Rural' ? colors.rural : colors.urban, 
-                        fontWeight: '600' 
-                      }}>{selectedRoute.type}</span> • {filteredPAPs.length} PAPs
+                      <span style={{ color: listMeta.subColor, fontWeight: '600' }}>{listMeta.subLabel}</span> • {filteredPAPs.length} PAPs
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <button onClick={handleStartAddPAP} style={{
-                      display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px',
-                      backgroundColor: colors.accent, color: 'white', border: 'none',
-                      borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
-                      boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
-                    }}>
-                      <Plus size={16} /> Add PAP
-                    </button>
+                    {selectedRoute && (
+                      <button onClick={handleStartAddPAP} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px',
+                        backgroundColor: colors.accent, color: 'white', border: 'none',
+                        borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                        boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
+                      }}>
+                        <Plus size={16} /> Add PAP
+                      </button>
+                    )}
                     <div style={{ position: 'relative', width: '220px' }}>
                     <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
                     <input
                       type="text"
-                      placeholder="Search PAPs in this route..."
+                      placeholder={listMeta.searchPlaceholder}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      style={{ 
-                        width: '100%', padding: '12px 14px 12px 44px', 
-                        backgroundColor: colors.bgCard, 
-                        border: `1px solid ${colors.border}`, 
+                      style={{
+                        width: '100%', padding: '12px 14px 12px 44px',
+                        backgroundColor: colors.bgCard,
+                        border: `1px solid ${colors.border}`,
                         borderRadius: '10px', fontSize: '14px', outline: 'none', boxSizing: 'border-box',
                         transition: 'border-color 0.2s'
                       }}
@@ -1543,7 +1573,8 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
-          )}
+            )
+          })()}
 
           {/* PAP DETAIL VIEW */}
           {view === 'detail' && selectedHousehold && (
@@ -1844,25 +1875,33 @@ function RouteCard({ route, onClick, type, households }) {
 }
 
 // Stat Card Component
-function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponent }) {
+function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponent, onClick }) {
+  const clickable = typeof onClick === 'function'
   return (
-    <div style={{ 
-      backgroundColor: colors.bgCard, 
-      borderRadius: '14px', 
-      padding: '20px 24px', 
-      border: `1px solid ${colors.border}`,
-      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-      transition: 'all 0.2s ease'
-    }}
-    onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 25px rgba(0,0,0,0.08)' }}
-    onMouseOut={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)' }}>
+    <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+      style={{
+        backgroundColor: colors.bgCard,
+        borderRadius: '14px',
+        padding: '20px 24px',
+        border: `1px solid ${colors.border}`,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        transition: 'all 0.2s ease',
+        cursor: clickable ? 'pointer' : 'default',
+        userSelect: 'none'
+      }}
+      onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = clickable ? `0 10px 28px ${color}33` : '0 8px 25px rgba(0,0,0,0.08)'; if (clickable) e.currentTarget.style.borderColor = color }}
+      onMouseOut={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'; e.currentTarget.style.borderColor = colors.border }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <p style={{ fontSize: '12px', fontWeight: '600', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>{label}</p>
           <p style={{ fontSize: '32px', fontWeight: '800', color: colors.textDark, margin: '4px 0 0 0', letterSpacing: '-1px' }}>{value}</p>
         </div>
-        <div style={{ 
-          padding: '14px', borderRadius: '12px', 
+        <div style={{
+          padding: '14px', borderRadius: '12px',
           background: `linear-gradient(135deg, ${color}15 0%, ${color}25 100%)`
         }}>
           {IconComponent ? <IconComponent size={24} color={color} /> : Icon && <Icon size={24} color={color} />}
