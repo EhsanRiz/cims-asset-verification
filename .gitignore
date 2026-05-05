@@ -17,7 +17,9 @@ yarn-error.log*
 # Environment files
 .env
 .env.local
+.env.save
 .env.*.local
+.env.*.save
 
 # Editor / OS
 .DS_Store
