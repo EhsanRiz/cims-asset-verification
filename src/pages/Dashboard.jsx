@@ -91,6 +91,9 @@ export default function Dashboard() {
   const [savingNewPAP, setSavingNewPAP] = useState(false)
   const [showCustomOccupationNew, setShowCustomOccupationNew] = useState(false)
   const [previewDoc, setPreviewDoc] = useState(null)
+  const [mergeTarget, setMergeTarget] = useState(null) // the "other" PAP
+  const [showMergeModal, setShowMergeModal] = useState(false)
+  const [merging, setMerging] = useState(false)
 
   // Build dynamic occupation options from existing data
   const occupationOptions = (() => {
@@ -816,6 +819,69 @@ export default function Dashboard() {
     } catch (err) {
       console.error('CAF delete error:', err)
       alert('Delete failed: ' + err.message)
+    }
+  }
+
+  // Merge two PAP records into one (admin tool — field-by-field).
+  // winnerId stays, loserId is deleted after its FK rows are reassigned.
+  const handleMergePAPs = async (winnerId, loserId, scalarUpdates) => {
+    if (!winnerId || !loserId || winnerId === loserId) return
+    setMerging(true)
+    try {
+      // Fetch fresh copies of both rows so we always concatenate the latest arrays
+      const { data: rows, error: fetchErr } = await supabase
+        .from('households')
+        .select('*')
+        .in('id', [winnerId, loserId])
+      if (fetchErr) throw fetchErr
+      const winner = rows?.find(r => r.id === winnerId)
+      const loser = rows?.find(r => r.id === loserId)
+      if (!winner || !loser) throw new Error('Could not load both PAPs.')
+
+      const concat = (a, b) => [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]
+      const arrayUpdates = {
+        land_assets_json: concat(winner.land_assets_json, loser.land_assets_json),
+        other_assets_json: concat(winner.other_assets_json, loser.other_assets_json),
+        other_documents: concat(winner.other_documents, loser.other_documents),
+        payment_documents: concat(winner.payment_documents, loser.payment_documents),
+        comments: concat(winner.comments, loser.comments),
+      }
+
+      // 1. Update winner with chosen scalar fields + concatenated arrays
+      const { error: updateErr } = await supabase
+        .from('households')
+        .update({
+          ...scalarUpdates,
+          ...arrayUpdates,
+          last_edited_by: user?.id,
+          last_edited_by_name: user?.full_name,
+          last_edited_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', winnerId)
+      if (updateErr) throw updateErr
+
+      // 2. Reassign FK-bearing related rows from loser to winner
+      for (const tbl of ['household_assets', 'beneficiaries', 'co_owners', 'banking_details', 'edit_requests']) {
+        const { error: reErr } = await supabase.from(tbl).update({ household_id: winnerId }).eq('household_id', loserId)
+        if (reErr) throw new Error(`Failed reassigning ${tbl}: ${reErr.message}`)
+      }
+
+      // 3. Delete the loser
+      const { error: delErr } = await supabase.from('households').delete().eq('id', loserId)
+      if (delErr) throw delErr
+
+      await loadData()
+      const { data: fresh } = await supabase.from('households').select('*').eq('id', winnerId).single()
+      if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
+      setShowMergeModal(false)
+      setMergeTarget(null)
+      alert('✅ PAPs merged successfully.')
+    } catch (err) {
+      console.error('Merge error:', err)
+      alert('Merge failed: ' + err.message)
+    } finally {
+      setMerging(false)
     }
   }
 
@@ -1833,6 +1899,7 @@ export default function Dashboard() {
               onDeletePaymentDoc={handleDeletePaymentDoc}
               onUpdatePayment={handleUpdatePayment}
               onDeletePAP={handleDeletePAP}
+              onOpenMerge={() => setShowMergeModal(true)}
               occupationOptions={occupationOptions}
               onPreviewDoc={setPreviewDoc}
               onRefresh={async () => {
@@ -1921,6 +1988,20 @@ export default function Dashboard() {
       {/* Document Preview Modal */}
       {previewDoc && (
         <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} colors={colors} />
+      )}
+
+      {/* Merge PAPs Modal */}
+      {showMergeModal && selectedHousehold && (
+        <MergePAPsModal
+          winner={selectedHousehold}
+          households={households}
+          mergeTarget={mergeTarget}
+          setMergeTarget={setMergeTarget}
+          merging={merging}
+          onCancel={() => { setShowMergeModal(false); setMergeTarget(null) }}
+          onConfirm={(scalarUpdates) => handleMergePAPs(selectedHousehold.id, mergeTarget.id, scalarUpdates)}
+          colors={colors}
+        />
       )}
 
       {/* Footer */}
@@ -2162,7 +2243,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2259,13 +2340,23 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
             </button>
           )}
           {!editMode && (
-            <button onClick={() => { setSelectedNewRoute(''); setShowMoveModal(true) }} style={{ 
-              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
-              backgroundColor: colors.primary, color: 'white', 
+            <button onClick={() => { setSelectedNewRoute(''); setShowMoveModal(true) }} style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
+              backgroundColor: colors.primary, color: 'white',
               border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
               boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)'
             }}>
               <ArrowRightLeft size={16} /> Move
+            </button>
+          )}
+          {!editMode && isAdmin && onOpenMerge && (
+            <button onClick={onOpenMerge} title="Merge this PAP with a duplicate" style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
+              backgroundColor: colors.urban, color: 'white',
+              border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(91, 122, 156, 0.25)'
+            }}>
+              <Users size={16} /> Merge
             </button>
           )}
         </div>
@@ -3023,6 +3114,216 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, onMarkSigned, isAdmin
 }
 
 // Document Preview Modal
+// Merge PAPs Modal — admin tool, field-by-field
+const MERGE_FIELDS = [
+  { key: 'file_number', label: 'File Number' },
+  { key: 'household_head_first_name', label: 'First Name' },
+  { key: 'household_head_surname', label: 'Surname' },
+  { key: 'gender', label: 'Gender' },
+  { key: 'id_number', label: 'ID Number' },
+  { key: 'cellphone_no', label: 'Phone' },
+  { key: 'occupation_of_pap', label: 'Occupation' },
+  { key: 'community_council', label: 'Community Council' },
+  { key: 'original_village', label: 'Original Village' },
+  { key: 'current_village', label: 'Current Village' },
+  { key: 'route_name', label: 'Route' },
+  { key: 'route_type', label: 'Route Type' },
+  { key: 'route_code', label: 'Route Code' },
+  { key: 'land_use', label: 'Land Use' },
+  { key: 'gps_coordinates', label: 'GPS' },
+  { key: 'latitude', label: 'Latitude' },
+  { key: 'longitude', label: 'Longitude' },
+  { key: 'photograph_of_pap_url', label: 'PAP Photo URL' },
+  { key: 'id_document_url', label: 'ID Document URL' },
+  { key: 'asset_photo_url', label: 'Asset Photo URL' },
+  { key: 'map_url', label: 'Map URL' },
+  { key: 'verification_status', label: 'Verification Status' },
+  { key: 'approval_status', label: 'Approval Status' },
+  { key: 'admin_notes', label: 'Admin Notes' },
+  { key: 'disturbance_allowance', label: 'Disturbance Allowance (M)' },
+  { key: 'total_compensation', label: 'Total Compensation (M)' },
+  { key: 'caf_document', label: 'CAF Document', type: 'object' },
+  { key: 'payment_status', label: 'Payment Status' },
+  { key: 'paid_amount', label: 'Paid Amount (M)' },
+  { key: 'paid_at', label: 'Paid At' },
+  { key: 'payment_reference', label: 'Payment Reference' },
+]
+
+function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, merging, onCancel, onConfirm, colors }) {
+  const [search, setSearch] = useState('')
+  const [choices, setChoices] = useState({}) // field → 'winner' | 'loser'
+
+  const candidates = households.filter(h => h.id !== winner.id).filter(h => {
+    if (!search) return true
+    const s = search.toLowerCase()
+    return [h.household_head_first_name, h.household_head_surname, h.id_number, h.file_number, h.route_name]
+      .some(v => v?.toLowerCase().includes(s))
+  }).slice(0, 50)
+
+  const sameValue = (a, b) => {
+    if (a == null && b == null) return true
+    if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b)
+    return String(a ?? '') === String(b ?? '')
+  }
+  const fmt = (v) => {
+    if (v == null || v === '') return '—'
+    if (typeof v === 'object') return v.name || JSON.stringify(v).slice(0, 50)
+    return String(v)
+  }
+
+  const buildScalarUpdates = () => {
+    if (!mergeTarget) return {}
+    const updates = {}
+    MERGE_FIELDS.forEach(({ key }) => {
+      const w = winner[key]
+      const l = mergeTarget[key]
+      if (sameValue(w, l)) return
+      const choice = choices[key] || 'winner' // default to keeping the surviving (winner) value
+      updates[key] = choice === 'loser' ? l : w
+    })
+    return updates
+  }
+
+  // Step 1 — picking the merge target
+  if (!mergeTarget) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '720px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Merge with Another PAP</h2>
+              <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>This PAP <strong>{winner.household_head_first_name} {winner.household_head_surname}</strong> ({winner.file_number || 'no file no.'}) will be kept.</p>
+            </div>
+            <button onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+          </div>
+          <div style={{ padding: '16px 24px', borderBottom: `1px solid ${colors.border}` }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
+              <input type="text" placeholder="Search by name, ID, file number, route…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: '100%', padding: '10px 14px 10px 44px', border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+            </div>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+            {candidates.length === 0 ? (
+              <p style={{ padding: '40px', textAlign: 'center', color: colors.textMuted }}>No matching PAPs.</p>
+            ) : candidates.map(c => (
+              <button key={c.id} onClick={() => setMergeTarget(c)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '12px 24px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', borderBottom: `1px solid ${colors.border}` }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = colors.bgLight}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                <p style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: colors.textDark }}>{c.household_head_first_name} {c.household_head_surname}</p>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: colors.textMuted }}>{c.file_number || '—'} • {c.route_name || '—'} • ID {c.id_number || '—'}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Step 2 — field-by-field comparison
+  const winnerArrCounts = {
+    land_assets_json: (winner.land_assets_json || []).length,
+    other_assets_json: (winner.other_assets_json || []).length,
+    other_documents: (winner.other_documents || []).length,
+    payment_documents: (winner.payment_documents || []).length,
+    comments: (winner.comments || []).length,
+  }
+  const loserArrCounts = {
+    land_assets_json: (mergeTarget.land_assets_json || []).length,
+    other_assets_json: (mergeTarget.other_assets_json || []).length,
+    other_documents: (mergeTarget.other_documents || []).length,
+    payment_documents: (mergeTarget.payment_documents || []).length,
+    comments: (mergeTarget.comments || []).length,
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '960px', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Choose Values to Keep</h2>
+            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>For each differing field, pick which value the merged PAP should keep. Lists (assets, documents, comments) are always combined.</p>
+          </div>
+          <button onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+        </div>
+        <div style={{ padding: '14px 24px', borderBottom: `1px solid ${colors.border}`, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', backgroundColor: colors.bgLight }}>
+          <div style={{ padding: '10px 14px', backgroundColor: `${colors.success}10`, borderRadius: '8px' }}>
+            <p style={{ fontSize: '11px', color: colors.success, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>Surviving PAP (kept)</p>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: colors.textDark, margin: '4px 0 0 0' }}>{winner.household_head_first_name} {winner.household_head_surname}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{winner.file_number || '—'}</p>
+          </div>
+          <div style={{ padding: '10px 14px', backgroundColor: `${colors.error}10`, borderRadius: '8px' }}>
+            <p style={{ fontSize: '11px', color: colors.error, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>Other PAP (will be deleted)</p>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: colors.textDark, margin: '4px 0 0 0' }}>{mergeTarget.household_head_first_name} {mergeTarget.household_head_surname}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{mergeTarget.file_number || '—'}</p>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px' }}>
+          {MERGE_FIELDS.map(({ key, label }) => {
+            const w = winner[key], l = mergeTarget[key]
+            if (sameValue(w, l)) return null
+            const chosen = choices[key] || 'winner'
+            return (
+              <div key={key} style={{ padding: '12px 0', borderBottom: `1px solid ${colors.border}` }}>
+                <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>{label}</p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  {[
+                    { side: 'winner', source: w, color: colors.success, recordLabel: 'Kept PAP' },
+                    { side: 'loser', source: l, color: colors.error, recordLabel: 'Other PAP' },
+                  ].map(({ side, source, color, recordLabel }) => {
+                    const isChosen = chosen === side
+                    return (
+                      <button key={side} onClick={() => setChoices(p => ({ ...p, [key]: side }))} style={{
+                        textAlign: 'left', cursor: 'pointer', padding: '10px 14px',
+                        backgroundColor: isChosen ? `${color}15` : colors.bgCard,
+                        border: `2px solid ${isChosen ? color : colors.border}`,
+                        borderRadius: '10px',
+                      }}>
+                        <p style={{ fontSize: '11px', color, fontWeight: 700, textTransform: 'uppercase', margin: '0 0 4px 0' }}>{recordLabel} {isChosen && '✓'}</p>
+                        <p style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, margin: 0, wordBreak: 'break-word' }}>{fmt(source)}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          {/* Combined arrays summary */}
+          <div style={{ padding: '12px 0' }}>
+            <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>Combined Lists (all items kept)</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+              {[
+                ['Land Assets', 'land_assets_json'],
+                ['Other Assets', 'other_assets_json'],
+                ['Other Documents', 'other_documents'],
+                ['Payment Documents', 'payment_documents'],
+                ['Comments', 'comments'],
+              ].map(([label, k]) => (
+                <div key={k} style={{ padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '10px', backgroundColor: colors.bgLight }}>
+                  <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>{label}</p>
+                  <p style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, margin: '4px 0 0 0' }}>{winnerArrCounts[k]} + {loserArrCounts[k]} = {winnerArrCounts[k] + loserArrCounts[k]}</p>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '10px 0 0 0' }}>Beneficiaries, co-owners, banking details, household assets, and edit requests linked to the other PAP will be reassigned to the surviving PAP.</p>
+          </div>
+        </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+          <button onClick={() => setMergeTarget(null)} disabled={merging} style={{ padding: '10px 16px', backgroundColor: colors.bgLight, color: colors.textDark, border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>← Pick a different PAP</button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={onCancel} disabled={merging} style={{ padding: '10px 16px', backgroundColor: colors.bgLight, color: colors.textDark, border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={() => {
+              if (!confirm(`Merge "${mergeTarget.household_head_first_name} ${mergeTarget.household_head_surname}" into "${winner.household_head_first_name} ${winner.household_head_surname}"?\n\nThe other PAP will be deleted. This cannot be undone.`)) return
+              onConfirm(buildScalarUpdates())
+            }} disabled={merging} style={{ padding: '10px 18px', backgroundColor: merging ? colors.bgLight : colors.success, color: merging ? colors.textMuted : 'white', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700, cursor: merging ? 'wait' : 'pointer', boxShadow: merging ? 'none' : `0 2px 8px ${colors.success}55` }}>
+              {merging ? 'Merging…' : 'Confirm Merge'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function DocumentPreviewModal({ doc, onClose, colors }) {
   const ext = (doc.file_type || doc.name?.split('.').pop() || '').toLowerCase()
   const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
