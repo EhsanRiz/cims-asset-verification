@@ -94,6 +94,7 @@ export default function Dashboard() {
   const [mergeTarget, setMergeTarget] = useState(null) // the "other" PAP
   const [showMergeModal, setShowMergeModal] = useState(false)
   const [merging, setMerging] = useState(false)
+  const [showRatesModal, setShowRatesModal] = useState(false)
 
   // Build dynamic occupation options from existing data
   const occupationOptions = (() => {
@@ -1478,7 +1479,16 @@ export default function Dashboard() {
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{user?.role}{canApprove ? ' • Can Approve' : ''}</span>
             </div>
-            <button onClick={() => { logout(); window.location.hash = '#/login' }} 
+            {isAdmin && (
+              <button onClick={() => setShowRatesModal(true)}
+                title="Manage valuation rates"
+                style={{ padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
+                <TrendingUp size={16} /> Rates
+              </button>
+            )}
+            <button onClick={() => { logout(); window.location.hash = '#/login' }}
               style={{ padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.8)', cursor: 'pointer', transition: 'all 0.2s' }}
               onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.3)'}
               onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
@@ -1988,6 +1998,16 @@ export default function Dashboard() {
       {/* Document Preview Modal */}
       {previewDoc && (
         <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} colors={colors} />
+      )}
+
+      {/* Rates Master Modal */}
+      {showRatesModal && isAdmin && (
+        <RatesMasterModal
+          user={user}
+          onClose={() => setShowRatesModal(false)}
+          onAfterPropagate={loadData}
+          colors={colors}
+        />
       )}
 
       {/* Merge PAPs Modal */}
@@ -3114,6 +3134,158 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, onMarkSigned, isAdmin
 }
 
 // Document Preview Modal
+// Rates Master Modal — admin tool to edit canonical valuation rates per land use
+// and propagate them to all PAPs (legacy single-asset and multi-asset).
+function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
+  const [rates, setRates] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState(null)
+  const [edits, setEdits] = useState({}) // id → { rate_perm, rate_temp }
+  const [newLandUse, setNewLandUse] = useState('')
+  const [newPerm, setNewPerm] = useState('')
+  const [newTemp, setNewTemp] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    const { data, error } = await supabase.from('valuation_rates').select('*').order('land_use')
+    if (error) { alert('Failed to load rates: ' + error.message); setLoading(false); return }
+    setRates(data || [])
+    setEdits({})
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const updateField = (id, field, value) => {
+    setEdits(prev => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }))
+  }
+
+  const saveRow = async (row) => {
+    const edit = edits[row.id] || {}
+    const newPermVal = edit.rate_perm !== undefined ? (edit.rate_perm === '' ? null : Number(edit.rate_perm)) : row.rate_perm
+    const newTempVal = edit.rate_temp !== undefined ? (edit.rate_temp === '' ? null : Number(edit.rate_temp)) : row.rate_temp
+    const samePerm = String(newPermVal ?? '') === String(row.rate_perm ?? '')
+    const sameTemp = String(newTempVal ?? '') === String(row.rate_temp ?? '')
+    if (samePerm && sameTemp) { alert('No changes to save.'); return }
+    if (!confirm(`Save new rates for "${row.land_use}" and propagate to all PAPs?\n\nPerm: ${newPermVal} M/sqm\nTemp: ${newTempVal} M/sqm`)) return
+    setSavingId(row.id)
+    try {
+      const { error: upErr } = await supabase.from('valuation_rates')
+        .update({ rate_perm: newPermVal, rate_temp: newTempVal, updated_by: user?.id, updated_at: new Date().toISOString() })
+        .eq('id', row.id)
+      if (upErr) throw upErr
+      const { data: affected, error: rpcErr } = await supabase.rpc('apply_rate_change', {
+        land_use_in: row.land_use,
+        new_rate_perm: newPermVal,
+        new_rate_temp: newTempVal,
+      })
+      if (rpcErr) throw rpcErr
+      await load()
+      if (onAfterPropagate) await onAfterPropagate()
+      alert(`✅ Rates saved. ${affected ?? 0} PAP record(s) updated.`)
+    } catch (err) {
+      console.error('Rate save error:', err)
+      alert('Save failed: ' + err.message)
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  const addRate = async () => {
+    const lu = newLandUse.trim()
+    if (!lu) { alert('Land use is required.'); return }
+    if (rates.some(r => r.land_use.toLowerCase() === lu.toLowerCase())) { alert('That land use already exists.'); return }
+    setAdding(true)
+    try {
+      const { error } = await supabase.from('valuation_rates').insert({
+        land_use: lu,
+        rate_perm: newPerm === '' ? null : Number(newPerm),
+        rate_temp: newTemp === '' ? null : Number(newTemp),
+        updated_by: user?.id,
+      })
+      if (error) throw error
+      setNewLandUse(''); setNewPerm(''); setNewTemp('')
+      await load()
+    } catch (err) {
+      alert('Failed to add: ' + err.message)
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '720px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Valuation Rates Master</h2>
+            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>Admin-only. Saving a row propagates the new rates to every PAP that uses that land use, and recomputes their total compensation.</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+          {loading ? (
+            <p style={{ padding: '40px', textAlign: 'center', color: colors.textMuted }}>Loading…</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: colors.bgLight }}>
+                  {['Land Use', 'Perm Rate (M/sqm)', 'Temp Rate (M/sqm)', 'Last Updated', ''].map((h, i) => (
+                    <th key={i} style={{ padding: '12px 24px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.4px', borderBottom: `1px solid ${colors.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rates.map(row => {
+                  const edit = edits[row.id] || {}
+                  const dirty = (edit.rate_perm !== undefined && String(edit.rate_perm) !== String(row.rate_perm ?? '')) || (edit.rate_temp !== undefined && String(edit.rate_temp) !== String(row.rate_temp ?? ''))
+                  const isSaving = savingId === row.id
+                  return (
+                    <tr key={row.id} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <td style={{ padding: '12px 24px', fontSize: '14px', fontWeight: 600, color: colors.textDark }}>{row.land_use}</td>
+                      <td style={{ padding: '12px 24px' }}>
+                        <input type="number" inputMode="decimal" value={edit.rate_perm !== undefined ? edit.rate_perm : (row.rate_perm ?? '')} onChange={(e) => updateField(row.id, 'rate_perm', e.target.value)} style={{ width: '120px', padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px' }} />
+                      </td>
+                      <td style={{ padding: '12px 24px' }}>
+                        <input type="number" inputMode="decimal" value={edit.rate_temp !== undefined ? edit.rate_temp : (row.rate_temp ?? '')} onChange={(e) => updateField(row.id, 'rate_temp', e.target.value)} style={{ width: '120px', padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px' }} />
+                      </td>
+                      <td style={{ padding: '12px 24px', fontSize: '12px', color: colors.textMuted }}>{row.updated_at ? new Date(row.updated_at).toLocaleString() : '—'}</td>
+                      <td style={{ padding: '12px 24px', textAlign: 'right' }}>
+                        <button onClick={() => saveRow(row)} disabled={!dirty || isSaving} style={{
+                          padding: '8px 14px',
+                          backgroundColor: dirty && !isSaving ? colors.success : colors.bgLight,
+                          color: dirty && !isSaving ? 'white' : colors.textMuted,
+                          border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+                          cursor: dirty && !isSaving ? 'pointer' : 'not-allowed',
+                          boxShadow: dirty && !isSaving ? `0 2px 8px ${colors.success}55` : 'none'
+                        }}>
+                          {isSaving ? 'Saving…' : 'Save & Propagate'}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgLight }}>
+          <p style={{ fontSize: '12px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>Add New Land Use</p>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <input type="text" placeholder="Land use (e.g. Inst.)" value={newLandUse} onChange={(e) => setNewLandUse(e.target.value)} style={{ padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px', width: '160px' }} />
+            <input type="number" inputMode="decimal" placeholder="Perm rate" value={newPerm} onChange={(e) => setNewPerm(e.target.value)} style={{ padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px', width: '120px' }} />
+            <input type="number" inputMode="decimal" placeholder="Temp rate" value={newTemp} onChange={(e) => setNewTemp(e.target.value)} style={{ padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px', width: '120px' }} />
+            <button onClick={addRate} disabled={adding || !newLandUse.trim()} style={{ padding: '8px 14px', backgroundColor: adding ? colors.bgLight : colors.accent, color: adding ? colors.textMuted : 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: adding || !newLandUse.trim() ? 'not-allowed' : 'pointer' }}>
+              {adding ? 'Adding…' : 'Add'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Merge PAPs Modal — admin tool, field-by-field
 const MERGE_FIELDS = [
   { key: 'file_number', label: 'File Number' },
