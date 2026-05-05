@@ -767,6 +767,28 @@ export default function Dashboard() {
     }
   }
 
+  // Mark CAF as signed / unsigned (admin)
+  const handleMarkCAFSigned = async (signed) => {
+    if (!selectedHousehold?.caf_document) return
+    try {
+      const updated = {
+        ...selectedHousehold.caf_document,
+        signed: !!signed,
+        verified_by: signed ? (user?.id || null) : null,
+        verified_by_name: signed ? (user?.full_name || user?.username || null) : null,
+        verified_at: signed ? new Date().toISOString() : null,
+      }
+      const { error } = await supabase.from('households').update({ caf_document: updated }).eq('id', selectedHousehold.id)
+      if (error) throw error
+      setSelectedHousehold(prev => ({ ...prev, caf_document: updated }))
+      setEditedData(prev => ({ ...prev, caf_document: updated }))
+      await loadData()
+    } catch (err) {
+      console.error('CAF mark error:', err)
+      alert('Update failed: ' + err.message)
+    }
+  }
+
   // Upload payment document
   const handlePaymentDocUpload = async (file, docName) => {
     if (!file || !selectedHousehold) return
@@ -1622,7 +1644,11 @@ export default function Dashboard() {
                           </td>
                           <td style={{ padding: '16px 20px' }}>
                             {pap.caf_document ? (
-                              <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Yes</span>
+                              pap.caf_document.signed ? (
+                                <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Signed</span>
+                              ) : (
+                                <span style={{ color: colors.warning, fontSize: '13px', fontWeight: '600' }}>● Unsigned</span>
+                              )
                             ) : (
                               <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
                             )}
@@ -1743,6 +1769,7 @@ export default function Dashboard() {
               onDeleteDocument={handleDeleteDocument}
               onCAFUpload={handleCAFUpload}
               onDeleteCAF={handleDeleteCAF}
+              onMarkCAFSigned={handleMarkCAFSigned}
               onPaymentDocUpload={handlePaymentDocUpload}
               onDeletePaymentDoc={handleDeletePaymentDoc}
               onUpdatePayment={handleUpdatePayment}
@@ -2076,7 +2103,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2370,7 +2397,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Compensation Agreement Form (CAF)" icon={FileText} color={colors.primary} colors={colors}>
-            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} colors={colors} />
+            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} onMarkSigned={onMarkCAFSigned} isAdmin={isAdmin} colors={colors} />
           </Card>
           <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
             <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={onPreviewDoc} colors={colors} />
@@ -2744,18 +2771,35 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
 }
 
 // CAF Uploader component
-function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
+function CAFUploader({ caf, onUpload, onDelete, onPreview, onMarkSigned, isAdmin, colors }) {
   const inputRef = useRef(null)
+  const signed = !!caf?.signed
+  const badge = caf
+    ? (signed
+        ? { bg: `${colors.success}15`, fg: colors.success, label: 'Signed & Verified' }
+        : { bg: `${colors.warning}15`, fg: colors.warning, label: 'Awaiting Signature' })
+    : null
   return (
-    <div>
+    <div style={{ display: 'grid', gap: '12px' }}>
       {caf ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+        <>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${signed ? colors.success : colors.border}` }}>
           <div style={{ width: '44px', height: '44px', borderRadius: '10px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={22} color={colors.primary} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{caf.name}</p>
-            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{caf.file_type?.toUpperCase() || 'PDF'} • {new Date(caf.uploaded_at).toLocaleDateString()}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '320px' }}>{caf.name}</p>
+              {badge && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '999px', backgroundColor: badge.bg, color: badge.fg, fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  {signed ? <CheckCircle size={12} /> : <Clock size={12} />} {badge.label}
+                </span>
+              )}
+            </div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>
+              {caf.file_type?.toUpperCase() || 'PDF'} • {new Date(caf.uploaded_at).toLocaleDateString()}
+              {signed && caf.verified_at ? ` • Signed verified ${new Date(caf.verified_at).toLocaleDateString()}${caf.verified_by_name ? ` by ${caf.verified_by_name}` : ''}` : ''}
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0, flexWrap: 'wrap' }}>
             <button onClick={() => onPreview?.(caf)} style={{ padding: '8px 14px', backgroundColor: `${colors.accent}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.accent }}><Eye size={14} /> View</button>
             <a href={caf.url} download style={{ padding: '8px 14px', backgroundColor: `${colors.primary}15`, borderRadius: '8px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.primary }}><Download size={14} /> Download</a>
             <button onClick={() => inputRef.current?.click()} style={{ padding: '8px 14px', backgroundColor: `${colors.warning}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.warning }}><Upload size={14} /> Replace</button>
@@ -2763,6 +2807,27 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
           </div>
           <input ref={inputRef} type="file" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} style={{ display: 'none' }} />
         </div>
+        {isAdmin && onMarkSigned && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '10px 14px', backgroundColor: signed ? `${colors.success}08` : `${colors.warning}08`, border: `1px dashed ${signed ? colors.success : colors.warning}55`, borderRadius: '10px' }}>
+            <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: 500 }}>
+              {signed
+                ? 'This CAF is marked as signed and verified.'
+                : 'Has the PAP signed this CAF? Mark it once you have verified the signature.'}
+            </span>
+            <button onClick={() => onMarkSigned(!signed)} style={{
+              padding: '8px 14px',
+              backgroundColor: signed ? colors.bgLight : colors.success,
+              color: signed ? colors.textDark : 'white',
+              border: signed ? `1px solid ${colors.border}` : 'none',
+              borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px',
+              fontSize: '13px', fontWeight: 700,
+              boxShadow: signed ? 'none' : `0 2px 8px ${colors.success}55`
+            }}>
+              {signed ? <><XCircle size={14} /> Mark as Unsigned</> : <><CheckCircle size={14} /> Mark as Signed</>}
+            </button>
+          </div>
+        )}
+        </>
       ) : (
         <div style={{ textAlign: 'center', padding: '30px 20px', border: `2px dashed ${colors.border}`, borderRadius: '12px', cursor: 'pointer' }} onClick={() => inputRef.current?.click()}>
           <Upload size={32} color={colors.textLight} style={{ opacity: 0.4, marginBottom: '8px' }} />
