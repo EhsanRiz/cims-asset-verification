@@ -767,6 +767,70 @@ export default function Dashboard() {
     }
   }
 
+  // Upload payment document
+  const handlePaymentDocUpload = async (file, docName) => {
+    if (!file || !selectedHousehold) return
+    try {
+      const result = await uploadToR2(file, 'payments')
+      const fileExt = file.name.split('.').pop()
+      const { data: current } = await supabase.from('households').select('payment_documents').eq('id', selectedHousehold.id).single()
+      const existing = current?.payment_documents || []
+      const newDoc = { name: docName || file.name, url: result.url, key: result.key, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase() }
+      const updated = [...existing, newDoc]
+      await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, payment_documents: updated }))
+      setEditedData(prev => ({ ...prev, payment_documents: updated }))
+      return true
+    } catch (err) {
+      console.error('Payment doc upload error:', err)
+      throw err
+    }
+  }
+
+  // Delete payment document
+  const handleDeletePaymentDoc = async (index) => {
+    if (!selectedHousehold) return
+    if (!confirm('Delete this payment document?')) return
+    try {
+      const existing = selectedHousehold.payment_documents || []
+      const doc = existing[index]
+      if (doc?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
+      }
+      const updated = existing.filter((_, i) => i !== index)
+      await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, payment_documents: updated }))
+      setEditedData(prev => ({ ...prev, payment_documents: updated }))
+      alert('Payment document deleted.')
+    } catch (err) {
+      console.error('Payment doc delete error:', err)
+      alert('Error: ' + err.message)
+    }
+  }
+
+  // Update payment status (admin-only mark-as-paid action)
+  const handleUpdatePayment = async ({ payment_status, paid_amount, paid_at, payment_reference }) => {
+    if (!selectedHousehold) return
+    try {
+      const updates = {
+        payment_status,
+        paid_amount: paid_amount === '' || paid_amount == null ? null : Number(paid_amount),
+        paid_at: paid_at || null,
+        payment_reference: payment_reference || null,
+        paid_marked_by: payment_status === 'paid' ? (user?.id || null) : null,
+      }
+      const { error } = await supabase.from('households').update(updates).eq('id', selectedHousehold.id)
+      if (error) throw error
+      setSelectedHousehold(prev => ({ ...prev, ...updates }))
+      setEditedData(prev => ({ ...prev, ...updates }))
+      await loadData()
+      alert('Payment details updated.')
+    } catch (err) {
+      console.error('Payment update error:', err)
+      alert('Update failed: ' + err.message)
+    }
+  }
+
   // Delete PAP
   const handleDeletePAP = async (pap) => {
     if (canApprove) {
@@ -1679,6 +1743,9 @@ export default function Dashboard() {
               onDeleteDocument={handleDeleteDocument}
               onCAFUpload={handleCAFUpload}
               onDeleteCAF={handleDeleteCAF}
+              onPaymentDocUpload={handlePaymentDocUpload}
+              onDeletePaymentDoc={handleDeletePaymentDoc}
+              onUpdatePayment={handleUpdatePayment}
               onDeletePAP={handleDeletePAP}
               occupationOptions={occupationOptions}
               onPreviewDoc={setPreviewDoc}
@@ -2009,7 +2076,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2200,6 +2267,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           { id: 'details', label: 'Details', icon: User },
           { id: 'valuation', label: 'Valuation', icon: FileText },
           { id: 'documents', label: 'Documents', icon: FileText },
+          { id: 'payments', label: 'Payments', icon: CreditCard },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ 
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', 
@@ -2309,6 +2377,124 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           </Card>
         </div>
       )}
+
+      {activeTab === 'payments' && (
+        <div style={{ display: 'grid', gap: '20px' }}>
+          <Card title="Payment Status" icon={CreditCard} color={colors.warning} colors={colors}>
+            <PaymentStatusForm household={data} isAdmin={isAdmin} onUpdate={onUpdatePayment} colors={colors} />
+          </Card>
+          <Card title="Payment Documents" icon={FileUp} color={colors.primary} colors={colors}>
+            <DocumentUploader documents={data.payment_documents || []} onUpload={onPaymentDocUpload} onDelete={onDeletePaymentDoc} onPreview={onPreviewDoc} colors={colors} />
+          </Card>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Payment Status Form
+function PaymentStatusForm({ household, isAdmin, onUpdate, colors }) {
+  const toLocalDate = (iso) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return ''
+    return d.toISOString().slice(0, 10)
+  }
+  const [status, setStatus] = useState(household.payment_status || 'not_paid')
+  const [amount, setAmount] = useState(household.paid_amount ?? '')
+  const [paidAt, setPaidAt] = useState(toLocalDate(household.paid_at))
+  const [reference, setReference] = useState(household.payment_reference || '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setStatus(household.payment_status || 'not_paid')
+    setAmount(household.paid_amount ?? '')
+    setPaidAt(toLocalDate(household.paid_at))
+    setReference(household.payment_reference || '')
+  }, [household.id, household.payment_status, household.paid_amount, household.paid_at, household.payment_reference])
+
+  const dirty = (
+    status !== (household.payment_status || 'not_paid') ||
+    String(amount ?? '') !== String(household.paid_amount ?? '') ||
+    paidAt !== toLocalDate(household.paid_at) ||
+    reference !== (household.payment_reference || '')
+  )
+
+  const statusBadge = {
+    not_paid: { bg: `${colors.warning}15`, fg: colors.warning, label: 'Not Paid' },
+    partial: { bg: `${colors.urban}15`, fg: colors.urban, label: 'Partial' },
+    paid: { bg: `${colors.success}15`, fg: colors.success, label: 'Paid' },
+  }[status] || { bg: colors.bgLight, fg: colors.textMuted, label: status }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await onUpdate({
+        payment_status: status,
+        paid_amount: amount === '' ? null : amount,
+        paid_at: paidAt ? new Date(paidAt).toISOString() : null,
+        payment_reference: reference,
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!isAdmin) {
+    return (
+      <div style={{ display: 'grid', gap: '12px' }}>
+        <div style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '999px', backgroundColor: statusBadge.bg, color: statusBadge.fg, fontWeight: 700, fontSize: '13px' }}>
+          {statusBadge.label}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+          <Field label="Amount Paid (M)" value={household.paid_amount} colors={colors} />
+          <Field label="Date Paid" value={household.paid_at ? new Date(household.paid_at).toLocaleDateString() : ''} colors={colors} />
+          <Field label="Payment Reference" value={household.payment_reference} colors={colors} />
+        </div>
+        <p style={{ fontSize: '12px', color: colors.textMuted, margin: 0 }}>Only admins can update payment status.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '999px', backgroundColor: statusBadge.bg, color: statusBadge.fg, fontWeight: 700, fontSize: '13px' }}>
+        {statusBadge.label}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Status</p>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', backgroundColor: colors.bgCard, boxSizing: 'border-box' }}>
+            <option value="not_paid">Not Paid</option>
+            <option value="partial">Partial</option>
+            <option value="paid">Paid</option>
+          </select>
+        </div>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Amount Paid (M)</p>
+          <input type="number" inputMode="decimal" value={amount ?? ''} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Date Paid</p>
+          <input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Payment Reference</p>
+          <input type="text" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Receipt / Bank ref" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+      </div>
+      <div>
+        <button onClick={save} disabled={!dirty || saving} style={{
+          padding: '10px 20px',
+          backgroundColor: dirty && !saving ? colors.success : colors.bgLight,
+          color: dirty && !saving ? 'white' : colors.textMuted,
+          border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+          cursor: dirty && !saving ? 'pointer' : 'not-allowed',
+          boxShadow: dirty && !saving ? `0 2px 8px ${colors.success}55` : 'none'
+        }}>
+          {saving ? 'Saving…' : 'Save Payment Details'}
+        </button>
+      </div>
     </div>
   )
 }
