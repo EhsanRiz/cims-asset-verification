@@ -62,6 +62,7 @@ export default function Dashboard() {
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [selectedHousehold, setSelectedHousehold] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [listFilter, setListFilter] = useState(null) // null | 'all' | 'paid'
   
   // Global search state
   const [globalSearchQuery, setGlobalSearchQuery] = useState('')
@@ -90,6 +91,10 @@ export default function Dashboard() {
   const [savingNewPAP, setSavingNewPAP] = useState(false)
   const [showCustomOccupationNew, setShowCustomOccupationNew] = useState(false)
   const [previewDoc, setPreviewDoc] = useState(null)
+  const [mergeTarget, setMergeTarget] = useState(null) // the "other" PAP
+  const [showMergeModal, setShowMergeModal] = useState(false)
+  const [merging, setMerging] = useState(false)
+  const [showRatesModal, setShowRatesModal] = useState(false)
 
   // Build dynamic occupation options from existing data
   const occupationOptions = (() => {
@@ -287,7 +292,7 @@ export default function Dashboard() {
     total: households.length,
     routes: routes.length,
     verified: households.filter(h => h.verification_status?.toLowerCase() === 'verified' || h.approval_status === 'approved').length,
-    withGPS: households.filter(h => h.latitude && h.longitude).length
+    paid: households.filter(h => h.payment_status === 'paid').length
   }
 
   // Progress calculation
@@ -303,26 +308,32 @@ export default function Dashboard() {
   const ruralRoutes = routes.filter(r => r.type === 'Rural')
   const urbanRoutes = routes.filter(r => r.type === 'Urban')
 
-  const filteredPAPs = selectedRoute 
-    ? households.filter(h => {
-        if (h.route_name !== selectedRoute.name) return false
-        if (!searchQuery) return true
-        const search = searchQuery.toLowerCase()
-        return (
-          h.household_head_first_name?.toLowerCase().includes(search) ||
-          h.household_head_surname?.toLowerCase().includes(search) ||
-          h.id_number?.toLowerCase().includes(search) ||
-          h.file_number?.toLowerCase().includes(search)
-        )
-      }).sort((a, b) => {
-        const fa = a.file_number || ''
-        const fb = b.file_number || ''
-        return fa.localeCompare(fb, undefined, { numeric: true, sensitivity: 'base' })
-      })
-    : []
+  const matchesSearch = (h) => {
+    if (!searchQuery) return true
+    const search = searchQuery.toLowerCase()
+    return (
+      h.household_head_first_name?.toLowerCase().includes(search) ||
+      h.household_head_surname?.toLowerCase().includes(search) ||
+      h.id_number?.toLowerCase().includes(search) ||
+      h.file_number?.toLowerCase().includes(search)
+    )
+  }
+  const sortByFileNumber = (a, b) => {
+    const fa = a.file_number || ''
+    const fb = b.file_number || ''
+    return fa.localeCompare(fb, undefined, { numeric: true, sensitivity: 'base' })
+  }
+  const filteredPAPs = selectedRoute
+    ? households.filter(h => h.route_name === selectedRoute.name && matchesSearch(h)).sort(sortByFileNumber)
+    : listFilter === 'all'
+      ? households.filter(matchesSearch).sort(sortByFileNumber)
+      : listFilter === 'paid'
+        ? households.filter(h => h.payment_status === 'paid' && matchesSearch(h)).sort(sortByFileNumber)
+        : []
 
   const handleSelectRoute = (route) => {
     setSelectedRoute(route)
+    setListFilter(null)
     setSearchQuery('')
     setView('paps')
   }
@@ -345,8 +356,20 @@ export default function Dashboard() {
       setView('paps')
     } else if (view === 'paps') {
       setSelectedRoute(null)
+      setListFilter(null)
       setView('routes')
     }
+  }
+
+  const openPAPList = (filter) => {
+    setSelectedRoute(null)
+    setListFilter(filter)
+    setSearchQuery('')
+    setView('paps')
+  }
+
+  const scrollToRoutes = () => {
+    document.getElementById('routes-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const handleFieldChange = (field, value) => {
@@ -365,7 +388,7 @@ export default function Dashboard() {
         'asset_photo_url', 'map_url', 'verification_status',
         'route_name', 'route_type', 'land_use', 'gps_coordinates', 'latitude', 'longitude',
         'affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp',
-        'disturbance_allowance', 'total_compensation'
+        'disturbance_allowance', 'total_compensation', 'land_assets_json'
       ]
       
       editableFields.forEach(field => {
@@ -379,6 +402,11 @@ export default function Dashboard() {
 
       // If user can approve (Admin or Mamokuena), save directly
       if (canApprove) {
+        const landAssets = Array.isArray(editedData.land_assets_json) ? editedData.land_assets_json : []
+        const num = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : parseFloat(v)
+        const assetsSubtotal = landAssets.reduce((sum, a) => sum + num(a.affected_area_perm) * num(a.rate_perm) + num(a.affected_area_temp) * num(a.rate_temp), 0)
+        const disturbance = num(editedData.disturbance_allowance)
+        const computedTotal = landAssets.length > 0 ? (assetsSubtotal + disturbance) : (editedData.total_compensation || null)
         const { error } = await supabase
           .from('households')
           .update({
@@ -408,7 +436,8 @@ export default function Dashboard() {
             rate_perm: editedData.rate_perm || null,
             rate_temp: editedData.rate_temp || null,
             disturbance_allowance: editedData.disturbance_allowance || null,
-            total_compensation: editedData.total_compensation || null,
+            total_compensation: computedTotal,
+            land_assets_json: landAssets,
             last_edited_by: user?.id,
             last_edited_by_name: user?.full_name,
             last_edited_at: new Date().toISOString(),
@@ -552,6 +581,39 @@ export default function Dashboard() {
   }
 
   // Handle approval/rejection of a NEW PAP registration submitted by a field surveyor
+  // Infer route code (e.g. "3006") for a route name from existing file_numbers
+  // shaped like "LLWDSP III-3006-007". Returns the most-frequent code, or null.
+  const inferRouteCode = (routeName) => {
+    if (!routeName) return null
+    const codeCounts = {}
+    households.forEach(h => {
+      if (h.route_name === routeName && h.file_number) {
+        const m = h.file_number.match(/^LLWDSP\s+III-(\d+)-/i)
+        if (m) codeCounts[m[1]] = (codeCounts[m[1]] || 0) + 1
+      }
+    })
+    const ranked = Object.entries(codeCounts).sort((a, b) => b[1] - a[1])
+    return ranked[0]?.[0] || null
+  }
+
+  // Compute next sequence number for a given route code, scanning existing
+  // file_numbers within that code and returning a 3-digit zero-padded string.
+  const nextFileNumber = (routeCode) => {
+    if (!routeCode) return null
+    let max = 0
+    const re = new RegExp(`^LLWDSP\\s+III-${routeCode}-(\\d+)`, 'i')
+    households.forEach(h => {
+      if (h.file_number) {
+        const m = h.file_number.match(re)
+        if (m) {
+          const n = parseInt(m[1], 10)
+          if (!isNaN(n) && n > max) max = n
+        }
+      }
+    })
+    return `LLWDSP III-${routeCode}-${String(max + 1).padStart(3, '0')}`
+  }
+
   const handleRegistrationApproval = async (reg, approved, reason = '', fileNumber = '') => {
     try {
       const nowIso = new Date().toISOString()
@@ -567,8 +629,21 @@ export default function Dashboard() {
         updates.verified_at = nowIso
       }
       if (reason) updates.admin_notes = reason
-      if (approved && fileNumber && fileNumber.trim()) {
-        updates.file_number = fileNumber.trim()
+      let assignedFileNumber = null
+      if (approved) {
+        const trimmedManual = fileNumber?.trim()
+        if (trimmedManual) {
+          updates.file_number = trimmedManual
+          assignedFileNumber = trimmedManual
+        } else if (!reg.file_number) {
+          // Auto-generate only when no file_number exists yet
+          const code = reg.route_code || inferRouteCode(reg.route_name)
+          const generated = nextFileNumber(code)
+          if (generated) {
+            updates.file_number = generated
+            assignedFileNumber = generated
+          }
+        }
       }
 
       const { error } = await supabase
@@ -579,8 +654,8 @@ export default function Dashboard() {
 
       // Notify the surveyor who submitted it
       if (reg.created_by_user) {
-        const fileNumberNote = approved && fileNumber && fileNumber.trim()
-          ? ` File number: ${fileNumber.trim()}.`
+        const fileNumberNote = approved && assignedFileNumber
+          ? ` File number: ${assignedFileNumber}.`
           : ''
         await supabase.from('notifications').insert({
           user_id: reg.created_by_user,
@@ -748,6 +823,155 @@ export default function Dashboard() {
     }
   }
 
+  // Merge two PAP records into one (admin tool — field-by-field).
+  // winnerId stays, loserId is deleted after its FK rows are reassigned.
+  const handleMergePAPs = async (winnerId, loserId, scalarUpdates) => {
+    if (!winnerId || !loserId || winnerId === loserId) return
+    setMerging(true)
+    try {
+      // Fetch fresh copies of both rows so we always concatenate the latest arrays
+      const { data: rows, error: fetchErr } = await supabase
+        .from('households')
+        .select('*')
+        .in('id', [winnerId, loserId])
+      if (fetchErr) throw fetchErr
+      const winner = rows?.find(r => r.id === winnerId)
+      const loser = rows?.find(r => r.id === loserId)
+      if (!winner || !loser) throw new Error('Could not load both PAPs.')
+
+      const concat = (a, b) => [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]
+      const arrayUpdates = {
+        land_assets_json: concat(winner.land_assets_json, loser.land_assets_json),
+        other_assets_json: concat(winner.other_assets_json, loser.other_assets_json),
+        other_documents: concat(winner.other_documents, loser.other_documents),
+        payment_documents: concat(winner.payment_documents, loser.payment_documents),
+        comments: concat(winner.comments, loser.comments),
+      }
+
+      // 1. Update winner with chosen scalar fields + concatenated arrays
+      const { error: updateErr } = await supabase
+        .from('households')
+        .update({
+          ...scalarUpdates,
+          ...arrayUpdates,
+          last_edited_by: user?.id,
+          last_edited_by_name: user?.full_name,
+          last_edited_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', winnerId)
+      if (updateErr) throw updateErr
+
+      // 2. Reassign FK-bearing related rows from loser to winner
+      for (const tbl of ['household_assets', 'beneficiaries', 'co_owners', 'banking_details', 'edit_requests']) {
+        const { error: reErr } = await supabase.from(tbl).update({ household_id: winnerId }).eq('household_id', loserId)
+        if (reErr) throw new Error(`Failed reassigning ${tbl}: ${reErr.message}`)
+      }
+
+      // 3. Delete the loser
+      const { error: delErr } = await supabase.from('households').delete().eq('id', loserId)
+      if (delErr) throw delErr
+
+      await loadData()
+      const { data: fresh } = await supabase.from('households').select('*').eq('id', winnerId).single()
+      if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
+      setShowMergeModal(false)
+      setMergeTarget(null)
+      alert('✅ PAPs merged successfully.')
+    } catch (err) {
+      console.error('Merge error:', err)
+      alert('Merge failed: ' + err.message)
+    } finally {
+      setMerging(false)
+    }
+  }
+
+  // Mark CAF as signed / unsigned (admin)
+  const handleMarkCAFSigned = async (signed) => {
+    if (!selectedHousehold?.caf_document) return
+    try {
+      const updated = {
+        ...selectedHousehold.caf_document,
+        signed: !!signed,
+        verified_by: signed ? (user?.id || null) : null,
+        verified_by_name: signed ? (user?.full_name || user?.username || null) : null,
+        verified_at: signed ? new Date().toISOString() : null,
+      }
+      const { error } = await supabase.from('households').update({ caf_document: updated }).eq('id', selectedHousehold.id)
+      if (error) throw error
+      setSelectedHousehold(prev => ({ ...prev, caf_document: updated }))
+      setEditedData(prev => ({ ...prev, caf_document: updated }))
+      await loadData()
+    } catch (err) {
+      console.error('CAF mark error:', err)
+      alert('Update failed: ' + err.message)
+    }
+  }
+
+  // Upload payment document
+  const handlePaymentDocUpload = async (file, docName) => {
+    if (!file || !selectedHousehold) return
+    try {
+      const result = await uploadToR2(file, 'payments')
+      const fileExt = file.name.split('.').pop()
+      const { data: current } = await supabase.from('households').select('payment_documents').eq('id', selectedHousehold.id).single()
+      const existing = current?.payment_documents || []
+      const newDoc = { name: docName || file.name, url: result.url, key: result.key, uploaded_at: new Date().toISOString(), file_type: fileExt.toLowerCase() }
+      const updated = [...existing, newDoc]
+      await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, payment_documents: updated }))
+      setEditedData(prev => ({ ...prev, payment_documents: updated }))
+      return true
+    } catch (err) {
+      console.error('Payment doc upload error:', err)
+      throw err
+    }
+  }
+
+  // Delete payment document
+  const handleDeletePaymentDoc = async (index) => {
+    if (!selectedHousehold) return
+    if (!confirm('Delete this payment document?')) return
+    try {
+      const existing = selectedHousehold.payment_documents || []
+      const doc = existing[index]
+      if (doc?.key) {
+        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
+      }
+      const updated = existing.filter((_, i) => i !== index)
+      await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)
+      setSelectedHousehold(prev => ({ ...prev, payment_documents: updated }))
+      setEditedData(prev => ({ ...prev, payment_documents: updated }))
+      alert('Payment document deleted.')
+    } catch (err) {
+      console.error('Payment doc delete error:', err)
+      alert('Error: ' + err.message)
+    }
+  }
+
+  // Update payment status (admin-only mark-as-paid action)
+  const handleUpdatePayment = async ({ payment_status, paid_amount, paid_at, payment_reference }) => {
+    if (!selectedHousehold) return
+    try {
+      const updates = {
+        payment_status,
+        paid_amount: paid_amount === '' || paid_amount == null ? null : Number(paid_amount),
+        paid_at: paid_at || null,
+        payment_reference: payment_reference || null,
+        paid_marked_by: payment_status === 'paid' ? (user?.id || null) : null,
+      }
+      const { error } = await supabase.from('households').update(updates).eq('id', selectedHousehold.id)
+      if (error) throw error
+      setSelectedHousehold(prev => ({ ...prev, ...updates }))
+      setEditedData(prev => ({ ...prev, ...updates }))
+      await loadData()
+      alert('Payment details updated.')
+    } catch (err) {
+      console.error('Payment update error:', err)
+      alert('Update failed: ' + err.message)
+    }
+  }
+
   // Delete PAP
   const handleDeletePAP = async (pap) => {
     if (canApprove) {
@@ -817,6 +1041,13 @@ export default function Dashboard() {
       Object.keys(record).forEach(k => { if (record[k] === '') record[k] = null })
       const numericFields = ['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp', 'disturbance_allowance', 'total_compensation', 'latitude', 'longitude']
       numericFields.forEach(f => { record[f] = record[f] === '' || record[f] == null ? null : (parseFloat(record[f]) || null) })
+
+      // Auto-generate file_number when admin leaves it blank
+      if (!record.file_number) {
+        const code = record.route_code || inferRouteCode(record.route_name)
+        const generated = nextFileNumber(code)
+        if (generated) record.file_number = generated
+      }
 
       const { data: inserted, error } = await supabase.from('households').insert(record).select().single()
       if (error) throw error
@@ -959,6 +1190,11 @@ export default function Dashboard() {
             {selectedRoute && view !== 'routes' && (
               <div style={{ marginLeft: '8px', padding: '6px 14px', backgroundColor: colors.accent, borderRadius: '6px' }}>
                 <span style={{ color: colors.primaryDark, fontSize: '13px', fontWeight: '600' }}>{selectedRoute.name}</span>
+              </div>
+            )}
+            {!selectedRoute && listFilter && view !== 'routes' && (
+              <div style={{ marginLeft: '8px', padding: '6px 14px', backgroundColor: colors.accent, borderRadius: '6px' }}>
+                <span style={{ color: colors.primaryDark, fontSize: '13px', fontWeight: '600' }}>{listFilter === 'paid' ? 'PAPs Paid' : 'All PAPs'}</span>
               </div>
             )}
           </div>
@@ -1160,7 +1396,7 @@ export default function Dashboard() {
                           </button>
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <button onClick={() => {
-                              const fileNo = prompt(`Assign file number for ${reg.household_head_first_name} ${reg.household_head_surname} (optional — leave blank to skip):`)
+                              const fileNo = prompt(`Assign file number for ${reg.household_head_first_name} ${reg.household_head_surname} (leave blank to auto-generate):`)
                               if (fileNo === null) return // cancelled
                               handleRegistrationApproval(reg, true, '', fileNo.trim())
                             }} style={{
@@ -1243,7 +1479,16 @@ export default function Dashboard() {
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{user?.role}{canApprove ? ' • Can Approve' : ''}</span>
             </div>
-            <button onClick={() => { logout(); window.location.hash = '#/login' }} 
+            {isAdmin && (
+              <button onClick={() => setShowRatesModal(true)}
+                title="Manage valuation rates"
+                style={{ padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
+                <TrendingUp size={16} /> Rates
+              </button>
+            )}
+            <button onClick={() => { logout(); window.location.hash = '#/login' }}
               style={{ padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.8)', cursor: 'pointer', transition: 'all 0.2s' }}
               onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.3)'}
               onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
@@ -1322,19 +1567,20 @@ export default function Dashboard() {
 
               {/* Stats Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-                <StatCard label="Total PAPs" value={stats.total} color={colors.primary} icon={Users} />
-                <StatCard label="Routes" value={stats.routes} color={colors.accent} iconComponent={MapIcon} />
+                <StatCard label="Total PAPs" value={stats.total} color={colors.primary} icon={Users} onClick={() => openPAPList('all')} />
+                <StatCard label="Routes" value={stats.routes} color={colors.accent} iconComponent={MapIcon} onClick={scrollToRoutes} />
                 <StatCard label="Verified" value={stats.verified} color={colors.success} icon={Check} />
-                <StatCard label="With GPS" value={stats.withGPS} color={colors.warning} icon={MapPin} />
+                <StatCard label="PAPs Paid" value={stats.paid} color={colors.warning} icon={CreditCard} onClick={() => openPAPList('paid')} />
               </div>
 
               {/* Routes Card */}
-              <div style={{ 
-                backgroundColor: colors.bgCard, 
-                borderRadius: '16px', 
-                padding: '24px', 
+              <div id="routes-section" style={{
+                backgroundColor: colors.bgCard,
+                borderRadius: '16px',
+                padding: '24px',
                 border: `1px solid ${colors.border}`,
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                scrollMarginTop: '16px'
               }}>
                 <h2 style={{ 
                   fontSize: '18px', fontWeight: '700', color: colors.textDark, 
@@ -1411,49 +1657,54 @@ export default function Dashboard() {
           )}
 
           {/* PAPS LIST VIEW */}
-          {view === 'paps' && selectedRoute && (
-            <div style={{ 
-              backgroundColor: colors.bgCard, 
-              borderRadius: '16px', 
-              border: `1px solid ${colors.border}`, 
+          {view === 'paps' && (selectedRoute || listFilter) && (() => {
+            const listMeta = selectedRoute
+              ? { title: selectedRoute.name, subLabel: selectedRoute.type, subColor: selectedRoute.type === 'Rural' ? colors.rural : colors.urban, searchPlaceholder: 'Search PAPs in this route...' }
+              : listFilter === 'paid'
+                ? { title: 'PAPs Paid', subLabel: 'Payment received', subColor: colors.warning, searchPlaceholder: 'Search paid PAPs...' }
+                : { title: 'All PAPs', subLabel: 'Across all routes', subColor: colors.primary, searchPlaceholder: 'Search all PAPs...' }
+            return (
+            <div style={{
+              backgroundColor: colors.bgCard,
+              borderRadius: '16px',
+              border: `1px solid ${colors.border}`,
               overflow: 'hidden',
               boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
             }}>
-              <div style={{ 
-                padding: '20px 24px', 
-                borderBottom: `1px solid ${colors.border}`, 
+              <div style={{
+                padding: '20px 24px',
+                borderBottom: `1px solid ${colors.border}`,
                 background: `linear-gradient(135deg, ${colors.bgLight} 0%, ${colors.bgCard} 100%)`
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
                   <div>
-                    <h2 style={{ fontSize: '20px', fontWeight: '700', color: colors.textDark, margin: 0 }}>{selectedRoute.name}</h2>
+                    <h2 style={{ fontSize: '20px', fontWeight: '700', color: colors.textDark, margin: 0 }}>{listMeta.title}</h2>
                     <p style={{ fontSize: '14px', color: colors.textMuted, margin: '4px 0 0 0' }}>
-                      <span style={{ 
-                        color: selectedRoute.type === 'Rural' ? colors.rural : colors.urban, 
-                        fontWeight: '600' 
-                      }}>{selectedRoute.type}</span> • {filteredPAPs.length} PAPs
+                      <span style={{ color: listMeta.subColor, fontWeight: '600' }}>{listMeta.subLabel}</span> • {filteredPAPs.length} PAPs
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <button onClick={handleStartAddPAP} style={{
-                      display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px',
-                      backgroundColor: colors.accent, color: 'white', border: 'none',
-                      borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
-                      boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
-                    }}>
-                      <Plus size={16} /> Add PAP
-                    </button>
+                    {selectedRoute && (
+                      <button onClick={handleStartAddPAP} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 16px',
+                        backgroundColor: colors.accent, color: 'white', border: 'none',
+                        borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                        boxShadow: '0 2px 8px rgba(140, 198, 63, 0.3)'
+                      }}>
+                        <Plus size={16} /> Add PAP
+                      </button>
+                    )}
                     <div style={{ position: 'relative', width: '220px' }}>
                     <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
                     <input
                       type="text"
-                      placeholder="Search PAPs in this route..."
+                      placeholder={listMeta.searchPlaceholder}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      style={{ 
-                        width: '100%', padding: '12px 14px 12px 44px', 
-                        backgroundColor: colors.bgCard, 
-                        border: `1px solid ${colors.border}`, 
+                      style={{
+                        width: '100%', padding: '12px 14px 12px 44px',
+                        backgroundColor: colors.bgCard,
+                        border: `1px solid ${colors.border}`,
                         borderRadius: '10px', fontSize: '14px', outline: 'none', boxSizing: 'border-box',
                         transition: 'border-color 0.2s'
                       }}
@@ -1528,7 +1779,11 @@ export default function Dashboard() {
                           </td>
                           <td style={{ padding: '16px 20px' }}>
                             {pap.caf_document ? (
-                              <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Yes</span>
+                              pap.caf_document.signed ? (
+                                <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ Signed</span>
+                              ) : (
+                                <span style={{ color: colors.warning, fontSize: '13px', fontWeight: '600' }}>● Unsigned</span>
+                              )
                             ) : (
                               <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
                             )}
@@ -1543,7 +1798,8 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
-          )}
+            )
+          })()}
 
           {/* PAP DETAIL VIEW */}
           {view === 'detail' && selectedHousehold && (
@@ -1584,7 +1840,7 @@ export default function Dashboard() {
                   <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                     <button
                       onClick={() => {
-                        const fileNo = prompt(`Assign file number for ${selectedHousehold.household_head_first_name} ${selectedHousehold.household_head_surname} (optional — leave blank to skip):`)
+                        const fileNo = prompt(`Assign file number for ${selectedHousehold.household_head_first_name} ${selectedHousehold.household_head_surname} (leave blank to auto-generate):`)
                         if (fileNo === null) return
                         handleRegistrationApproval(selectedHousehold, true, '', fileNo.trim())
                       }}
@@ -1648,7 +1904,12 @@ export default function Dashboard() {
               onDeleteDocument={handleDeleteDocument}
               onCAFUpload={handleCAFUpload}
               onDeleteCAF={handleDeleteCAF}
+              onMarkCAFSigned={handleMarkCAFSigned}
+              onPaymentDocUpload={handlePaymentDocUpload}
+              onDeletePaymentDoc={handleDeletePaymentDoc}
+              onUpdatePayment={handleUpdatePayment}
               onDeletePAP={handleDeletePAP}
+              onOpenMerge={() => setShowMergeModal(true)}
               occupationOptions={occupationOptions}
               onPreviewDoc={setPreviewDoc}
               onRefresh={async () => {
@@ -1737,6 +1998,30 @@ export default function Dashboard() {
       {/* Document Preview Modal */}
       {previewDoc && (
         <DocumentPreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} colors={colors} />
+      )}
+
+      {/* Rates Master Modal */}
+      {showRatesModal && isAdmin && (
+        <RatesMasterModal
+          user={user}
+          onClose={() => setShowRatesModal(false)}
+          onAfterPropagate={loadData}
+          colors={colors}
+        />
+      )}
+
+      {/* Merge PAPs Modal */}
+      {showMergeModal && selectedHousehold && (
+        <MergePAPsModal
+          winner={selectedHousehold}
+          households={households}
+          mergeTarget={mergeTarget}
+          setMergeTarget={setMergeTarget}
+          merging={merging}
+          onCancel={() => { setShowMergeModal(false); setMergeTarget(null) }}
+          onConfirm={(scalarUpdates) => handleMergePAPs(selectedHousehold.id, mergeTarget.id, scalarUpdates)}
+          colors={colors}
+        />
       )}
 
       {/* Footer */}
@@ -1844,25 +2129,33 @@ function RouteCard({ route, onClick, type, households }) {
 }
 
 // Stat Card Component
-function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponent }) {
+function StatCard({ label, value, color, icon: Icon, iconComponent: IconComponent, onClick }) {
+  const clickable = typeof onClick === 'function'
   return (
-    <div style={{ 
-      backgroundColor: colors.bgCard, 
-      borderRadius: '14px', 
-      padding: '20px 24px', 
-      border: `1px solid ${colors.border}`,
-      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-      transition: 'all 0.2s ease'
-    }}
-    onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 25px rgba(0,0,0,0.08)' }}
-    onMouseOut={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)' }}>
+    <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+      style={{
+        backgroundColor: colors.bgCard,
+        borderRadius: '14px',
+        padding: '20px 24px',
+        border: `1px solid ${colors.border}`,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        transition: 'all 0.2s ease',
+        cursor: clickable ? 'pointer' : 'default',
+        userSelect: 'none'
+      }}
+      onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = clickable ? `0 10px 28px ${color}33` : '0 8px 25px rgba(0,0,0,0.08)'; if (clickable) e.currentTarget.style.borderColor = color }}
+      onMouseOut={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'; e.currentTarget.style.borderColor = colors.border }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <p style={{ fontSize: '12px', fontWeight: '600', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>{label}</p>
           <p style={{ fontSize: '32px', fontWeight: '800', color: colors.textDark, margin: '4px 0 0 0', letterSpacing: '-1px' }}>{value}</p>
         </div>
-        <div style={{ 
-          padding: '14px', borderRadius: '12px', 
+        <div style={{
+          padding: '14px', borderRadius: '12px',
           background: `linear-gradient(135deg, ${color}15 0%, ${color}25 100%)`
         }}>
           {IconComponent ? <IconComponent size={24} color={color} /> : Icon && <Icon size={24} color={color} />}
@@ -1970,7 +2263,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onDeletePAP, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2067,13 +2360,23 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
             </button>
           )}
           {!editMode && (
-            <button onClick={() => { setSelectedNewRoute(''); setShowMoveModal(true) }} style={{ 
-              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
-              backgroundColor: colors.primary, color: 'white', 
+            <button onClick={() => { setSelectedNewRoute(''); setShowMoveModal(true) }} style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
+              backgroundColor: colors.primary, color: 'white',
               border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
               boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)'
             }}>
               <ArrowRightLeft size={16} /> Move
+            </button>
+          )}
+          {!editMode && isAdmin && onOpenMerge && (
+            <button onClick={onOpenMerge} title="Merge this PAP with a duplicate" style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
+              backgroundColor: colors.urban, color: 'white',
+              border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(91, 122, 156, 0.25)'
+            }}>
+              <Users size={16} /> Merge
             </button>
           )}
         </div>
@@ -2161,6 +2464,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           { id: 'details', label: 'Details', icon: User },
           { id: 'valuation', label: 'Valuation', icon: FileText },
           { id: 'documents', label: 'Documents', icon: FileText },
+          { id: 'payments', label: 'Payments', icon: CreditCard },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ 
             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', 
@@ -2242,14 +2546,7 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
       {activeTab === 'valuation' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Affected Area & Compensation" icon={Home} color={colors.primary} colors={colors}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-              <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
-              <Field label="Total Compensation (M)" value={data.total_compensation} field="total_compensation" editMode={editMode} onChange={onFieldChange} highlight colors={colors} />
-            </div>
+            <LandAssetsValuation data={data} editMode={editMode} isAdmin={isAdmin} onFieldChange={onFieldChange} colors={colors} />
           </Card>
 
           {data.other_assets_json && (
@@ -2263,12 +2560,260 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
       {activeTab === 'documents' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Compensation Agreement Form (CAF)" icon={FileText} color={colors.primary} colors={colors}>
-            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} colors={colors} />
+            <CAFUploader caf={data.caf_document} onUpload={onCAFUpload} onDelete={onDeleteCAF} onPreview={onPreviewDoc} onMarkSigned={onMarkCAFSigned} isAdmin={isAdmin} colors={colors} />
           </Card>
           <Card title="PAP Documents" icon={FileUp} color={colors.urban} colors={colors}>
             <DocumentUploader documents={data.other_documents || []} onUpload={onDocumentUpload} onDelete={onDeleteDocument} onPreview={onPreviewDoc} colors={colors} />
           </Card>
         </div>
+      )}
+
+      {activeTab === 'payments' && (
+        <div style={{ display: 'grid', gap: '20px' }}>
+          <Card title="Payment Status" icon={CreditCard} color={colors.warning} colors={colors}>
+            <PaymentStatusForm household={data} isAdmin={isAdmin} onUpdate={onUpdatePayment} colors={colors} />
+          </Card>
+          <Card title="Payment Documents" icon={FileUp} color={colors.primary} colors={colors}>
+            <DocumentUploader documents={data.payment_documents || []} onUpload={onPaymentDocUpload} onDelete={onDeletePaymentDoc} onPreview={onPreviewDoc} colors={colors} />
+          </Card>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Payment Status Form
+function PaymentStatusForm({ household, isAdmin, onUpdate, colors }) {
+  const toLocalDate = (iso) => {
+    if (!iso) return ''
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return ''
+    return d.toISOString().slice(0, 10)
+  }
+  const [status, setStatus] = useState(household.payment_status || 'not_paid')
+  const [amount, setAmount] = useState(household.paid_amount ?? '')
+  const [paidAt, setPaidAt] = useState(toLocalDate(household.paid_at))
+  const [reference, setReference] = useState(household.payment_reference || '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setStatus(household.payment_status || 'not_paid')
+    setAmount(household.paid_amount ?? '')
+    setPaidAt(toLocalDate(household.paid_at))
+    setReference(household.payment_reference || '')
+  }, [household.id, household.payment_status, household.paid_amount, household.paid_at, household.payment_reference])
+
+  const dirty = (
+    status !== (household.payment_status || 'not_paid') ||
+    String(amount ?? '') !== String(household.paid_amount ?? '') ||
+    paidAt !== toLocalDate(household.paid_at) ||
+    reference !== (household.payment_reference || '')
+  )
+
+  const statusBadge = {
+    not_paid: { bg: `${colors.warning}15`, fg: colors.warning, label: 'Not Paid' },
+    partial: { bg: `${colors.urban}15`, fg: colors.urban, label: 'Partial' },
+    paid: { bg: `${colors.success}15`, fg: colors.success, label: 'Paid' },
+  }[status] || { bg: colors.bgLight, fg: colors.textMuted, label: status }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await onUpdate({
+        payment_status: status,
+        paid_amount: amount === '' ? null : amount,
+        paid_at: paidAt ? new Date(paidAt).toISOString() : null,
+        payment_reference: reference,
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!isAdmin) {
+    return (
+      <div style={{ display: 'grid', gap: '12px' }}>
+        <div style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '999px', backgroundColor: statusBadge.bg, color: statusBadge.fg, fontWeight: 700, fontSize: '13px' }}>
+          {statusBadge.label}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+          <Field label="Amount Paid (M)" value={household.paid_amount} colors={colors} />
+          <Field label="Date Paid" value={household.paid_at ? new Date(household.paid_at).toLocaleDateString() : ''} colors={colors} />
+          <Field label="Payment Reference" value={household.payment_reference} colors={colors} />
+        </div>
+        <p style={{ fontSize: '12px', color: colors.textMuted, margin: 0 }}>Only admins can update payment status.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '999px', backgroundColor: statusBadge.bg, color: statusBadge.fg, fontWeight: 700, fontSize: '13px' }}>
+        {statusBadge.label}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Status</p>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', backgroundColor: colors.bgCard, boxSizing: 'border-box' }}>
+            <option value="not_paid">Not Paid</option>
+            <option value="partial">Partial</option>
+            <option value="paid">Paid</option>
+          </select>
+        </div>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Amount Paid (M)</p>
+          <input type="number" inputMode="decimal" value={amount ?? ''} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Date Paid</p>
+          <input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+        <div>
+          <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 500 }}>Payment Reference</p>
+          <input type="text" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Receipt / Bank ref" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+        </div>
+      </div>
+      <div>
+        <button onClick={save} disabled={!dirty || saving} style={{
+          padding: '10px 20px',
+          backgroundColor: dirty && !saving ? colors.success : colors.bgLight,
+          color: dirty && !saving ? 'white' : colors.textMuted,
+          border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+          cursor: dirty && !saving ? 'pointer' : 'not-allowed',
+          boxShadow: dirty && !saving ? `0 2px 8px ${colors.success}55` : 'none'
+        }}>
+          {saving ? 'Saving…' : 'Save Payment Details'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Multi-asset Valuation table for the Detail view
+const LAND_USE_OPTIONS = ['Res', 'Agric', 'Com', 'Mixed']
+const numOrZero = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : parseFloat(v)
+const assetSubtotal = (a) => numOrZero(a.affected_area_perm) * numOrZero(a.rate_perm) + numOrZero(a.affected_area_temp) * numOrZero(a.rate_temp)
+const formatM = (n) => 'M ' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors }) {
+  const stored = Array.isArray(data.land_assets_json) ? data.land_assets_json : []
+  const hasMulti = stored.length > 0
+  const legacyHasValues = !!(data.affected_area_perm || data.affected_area_temp || data.rate_perm || data.rate_temp || data.land_use)
+
+  const updateAssets = (next) => onFieldChange('land_assets_json', next)
+  const updateAsset = (idx, patch) => {
+    const next = stored.map((a, i) => i === idx ? { ...a, ...patch } : a)
+    updateAssets(next)
+  }
+  const addAsset = () => {
+    updateAssets([...stored, { land_use: 'Res', affected_area_perm: '', affected_area_temp: '', rate_perm: '', rate_temp: '' }])
+  }
+  const removeAsset = (idx) => {
+    if (!confirm('Remove this asset row?')) return
+    updateAssets(stored.filter((_, i) => i !== idx))
+  }
+  const convertLegacyToMulti = () => {
+    updateAssets([{
+      land_use: data.land_use || 'Res',
+      affected_area_perm: data.affected_area_perm || '',
+      affected_area_temp: data.affected_area_temp || '',
+      rate_perm: data.rate_perm || '',
+      rate_temp: data.rate_temp || '',
+    }])
+  }
+
+  const subtotal = stored.reduce((s, a) => s + assetSubtotal(a), 0)
+  const disturbance = numOrZero(data.disturbance_allowance)
+  const total = hasMulti ? subtotal + disturbance : (data.total_compensation || 0)
+
+  // Multi-asset rendering
+  if (hasMulti) {
+    return (
+      <div style={{ display: 'grid', gap: '16px' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '720px' }}>
+            <thead>
+              <tr style={{ backgroundColor: colors.bgLight }}>
+                {['Land Use', 'Perm Area (sqm)', 'Temp Area (sqm)', 'Perm Rate (M/sqm)', 'Temp Rate (M/sqm)', 'Subtotal', editMode ? '' : null].filter(x => x !== null).map((h, i) => (
+                  <th key={i} style={{ padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.4px', borderBottom: `1px solid ${colors.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stored.map((a, idx) => (
+                <tr key={idx} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                  <td style={{ padding: '10px 12px' }}>
+                    {editMode ? (
+                      <select value={a.land_use || ''} onChange={(e) => updateAsset(idx, { land_use: e.target.value })} style={{ padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', backgroundColor: colors.bgCard }}>
+                        {LAND_USE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textDark }}>{a.land_use || '-'}</span>
+                    )}
+                  </td>
+                  {['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp'].map(field => (
+                    <td key={field} style={{ padding: '10px 12px' }}>
+                      {editMode ? (
+                        <input type="number" inputMode="decimal" value={a[field] ?? ''} onChange={(e) => updateAsset(idx, { [field]: e.target.value })} style={{ width: '110px', padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px' }} />
+                      ) : (
+                        <span style={{ fontSize: '13px', color: colors.textDark }}>{a[field] || '-'}</span>
+                      )}
+                    </td>
+                  ))}
+                  <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 600, color: colors.textDark }}>{formatM(assetSubtotal(a))}</td>
+                  {editMode && (
+                    <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                      <button onClick={() => removeAsset(idx)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444' }} title="Remove asset"><Trash2 size={16} /></button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {editMode && (
+          <button onClick={addAsset} style={{ alignSelf: 'flex-start', padding: '8px 14px', backgroundColor: `${colors.accent}15`, color: colors.accent, border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Plus size={14} /> Add Asset
+          </button>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', borderTop: `1px solid ${colors.border}`, paddingTop: '16px' }}>
+          <div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Assets Subtotal</p>
+            <p style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>{formatM(subtotal)}</p>
+          </div>
+          <div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Disturbance Allowance</p>
+            {editMode ? (
+              <input type="number" inputMode="decimal" value={data.disturbance_allowance ?? ''} onChange={(e) => onFieldChange('disturbance_allowance', e.target.value)} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
+            ) : (
+              <p style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>{formatM(disturbance)}</p>
+            )}
+          </div>
+          <div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Total Compensation</p>
+            <p style={{ fontSize: '20px', fontWeight: 800, color: colors.success, margin: 0 }}>{formatM(total)}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Legacy single-asset rendering (preserved for existing PAPs)
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+        <Field label="Land Use" value={data.land_use} field="land_use" editMode={editMode} onChange={onFieldChange} colors={colors} options={LAND_USE_OPTIONS} />
+        <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
+        <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+        <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
+        <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+        <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
+        <Field label="Total Compensation (M)" value={data.total_compensation} field="total_compensation" editMode={editMode} onChange={onFieldChange} highlight colors={colors} />
+      </div>
+      {editMode && isAdmin && (
+        <button onClick={legacyHasValues ? convertLegacyToMulti : addAsset} style={{ alignSelf: 'flex-start', padding: '8px 14px', backgroundColor: `${colors.accent}15`, color: colors.accent, border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Plus size={14} /> {legacyHasValues ? 'Convert to multi-asset' : 'Add additional asset'}
+        </button>
       )}
     </div>
   )
@@ -2519,18 +3064,35 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
 }
 
 // CAF Uploader component
-function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
+function CAFUploader({ caf, onUpload, onDelete, onPreview, onMarkSigned, isAdmin, colors }) {
   const inputRef = useRef(null)
+  const signed = !!caf?.signed
+  const badge = caf
+    ? (signed
+        ? { bg: `${colors.success}15`, fg: colors.success, label: 'Signed & Verified' }
+        : { bg: `${colors.warning}15`, fg: colors.warning, label: 'Awaiting Signature' })
+    : null
   return (
-    <div>
+    <div style={{ display: 'grid', gap: '12px' }}>
       {caf ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+        <>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${signed ? colors.success : colors.border}` }}>
           <div style={{ width: '44px', height: '44px', borderRadius: '10px', backgroundColor: `${colors.primary}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FileText size={22} color={colors.primary} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{caf.name}</p>
-            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{caf.file_type?.toUpperCase() || 'PDF'} • {new Date(caf.uploaded_at).toLocaleDateString()}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <p style={{ fontSize: '14px', fontWeight: '600', color: colors.textDark, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '320px' }}>{caf.name}</p>
+              {badge && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '999px', backgroundColor: badge.bg, color: badge.fg, fontWeight: 700, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  {signed ? <CheckCircle size={12} /> : <Clock size={12} />} {badge.label}
+                </span>
+              )}
+            </div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>
+              {caf.file_type?.toUpperCase() || 'PDF'} • {new Date(caf.uploaded_at).toLocaleDateString()}
+              {signed && caf.verified_at ? ` • Signed verified ${new Date(caf.verified_at).toLocaleDateString()}${caf.verified_by_name ? ` by ${caf.verified_by_name}` : ''}` : ''}
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0, flexWrap: 'wrap' }}>
             <button onClick={() => onPreview?.(caf)} style={{ padding: '8px 14px', backgroundColor: `${colors.accent}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.accent }}><Eye size={14} /> View</button>
             <a href={caf.url} download style={{ padding: '8px 14px', backgroundColor: `${colors.primary}15`, borderRadius: '8px', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.primary }}><Download size={14} /> Download</a>
             <button onClick={() => inputRef.current?.click()} style={{ padding: '8px 14px', backgroundColor: `${colors.warning}15`, border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: '600', color: colors.warning }}><Upload size={14} /> Replace</button>
@@ -2538,6 +3100,27 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
           </div>
           <input ref={inputRef} type="file" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} style={{ display: 'none' }} />
         </div>
+        {isAdmin && onMarkSigned && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '10px 14px', backgroundColor: signed ? `${colors.success}08` : `${colors.warning}08`, border: `1px dashed ${signed ? colors.success : colors.warning}55`, borderRadius: '10px' }}>
+            <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: 500 }}>
+              {signed
+                ? 'This CAF is marked as signed and verified.'
+                : 'Has the PAP signed this CAF? Mark it once you have verified the signature.'}
+            </span>
+            <button onClick={() => onMarkSigned(!signed)} style={{
+              padding: '8px 14px',
+              backgroundColor: signed ? colors.bgLight : colors.success,
+              color: signed ? colors.textDark : 'white',
+              border: signed ? `1px solid ${colors.border}` : 'none',
+              borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px',
+              fontSize: '13px', fontWeight: 700,
+              boxShadow: signed ? 'none' : `0 2px 8px ${colors.success}55`
+            }}>
+              {signed ? <><XCircle size={14} /> Mark as Unsigned</> : <><CheckCircle size={14} /> Mark as Signed</>}
+            </button>
+          </div>
+        )}
+        </>
       ) : (
         <div style={{ textAlign: 'center', padding: '30px 20px', border: `2px dashed ${colors.border}`, borderRadius: '12px', cursor: 'pointer' }} onClick={() => inputRef.current?.click()}>
           <Upload size={32} color={colors.textLight} style={{ opacity: 0.4, marginBottom: '8px' }} />
@@ -2551,6 +3134,368 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, colors }) {
 }
 
 // Document Preview Modal
+// Rates Master Modal — admin tool to edit canonical valuation rates per land use
+// and propagate them to all PAPs (legacy single-asset and multi-asset).
+function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
+  const [rates, setRates] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState(null)
+  const [edits, setEdits] = useState({}) // id → { rate_perm, rate_temp }
+  const [newLandUse, setNewLandUse] = useState('')
+  const [newPerm, setNewPerm] = useState('')
+  const [newTemp, setNewTemp] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    const { data, error } = await supabase.from('valuation_rates').select('*').order('land_use')
+    if (error) { alert('Failed to load rates: ' + error.message); setLoading(false); return }
+    setRates(data || [])
+    setEdits({})
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const updateField = (id, field, value) => {
+    setEdits(prev => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }))
+  }
+
+  const saveRow = async (row) => {
+    const edit = edits[row.id] || {}
+    const newPermVal = edit.rate_perm !== undefined ? (edit.rate_perm === '' ? null : Number(edit.rate_perm)) : row.rate_perm
+    const newTempVal = edit.rate_temp !== undefined ? (edit.rate_temp === '' ? null : Number(edit.rate_temp)) : row.rate_temp
+    const samePerm = String(newPermVal ?? '') === String(row.rate_perm ?? '')
+    const sameTemp = String(newTempVal ?? '') === String(row.rate_temp ?? '')
+    if (samePerm && sameTemp) { alert('No changes to save.'); return }
+    if (!confirm(`Save new rates for "${row.land_use}" and propagate to all PAPs?\n\nPerm: ${newPermVal} M/sqm\nTemp: ${newTempVal} M/sqm`)) return
+    setSavingId(row.id)
+    try {
+      const { error: upErr } = await supabase.from('valuation_rates')
+        .update({ rate_perm: newPermVal, rate_temp: newTempVal, updated_by: user?.id, updated_at: new Date().toISOString() })
+        .eq('id', row.id)
+      if (upErr) throw upErr
+      const { data: affected, error: rpcErr } = await supabase.rpc('apply_rate_change', {
+        land_use_in: row.land_use,
+        new_rate_perm: newPermVal,
+        new_rate_temp: newTempVal,
+      })
+      if (rpcErr) throw rpcErr
+      await load()
+      if (onAfterPropagate) await onAfterPropagate()
+      alert(`✅ Rates saved. ${affected ?? 0} PAP record(s) updated.`)
+    } catch (err) {
+      console.error('Rate save error:', err)
+      alert('Save failed: ' + err.message)
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  const addRate = async () => {
+    const lu = newLandUse.trim()
+    if (!lu) { alert('Land use is required.'); return }
+    if (rates.some(r => r.land_use.toLowerCase() === lu.toLowerCase())) { alert('That land use already exists.'); return }
+    setAdding(true)
+    try {
+      const { error } = await supabase.from('valuation_rates').insert({
+        land_use: lu,
+        rate_perm: newPerm === '' ? null : Number(newPerm),
+        rate_temp: newTemp === '' ? null : Number(newTemp),
+        updated_by: user?.id,
+      })
+      if (error) throw error
+      setNewLandUse(''); setNewPerm(''); setNewTemp('')
+      await load()
+    } catch (err) {
+      alert('Failed to add: ' + err.message)
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '720px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Valuation Rates Master</h2>
+            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>Admin-only. Saving a row propagates the new rates to every PAP that uses that land use, and recomputes their total compensation.</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+          {loading ? (
+            <p style={{ padding: '40px', textAlign: 'center', color: colors.textMuted }}>Loading…</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: colors.bgLight }}>
+                  {['Land Use', 'Perm Rate (M/sqm)', 'Temp Rate (M/sqm)', 'Last Updated', ''].map((h, i) => (
+                    <th key={i} style={{ padding: '12px 24px', textAlign: 'left', fontSize: '11px', fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.4px', borderBottom: `1px solid ${colors.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rates.map(row => {
+                  const edit = edits[row.id] || {}
+                  const dirty = (edit.rate_perm !== undefined && String(edit.rate_perm) !== String(row.rate_perm ?? '')) || (edit.rate_temp !== undefined && String(edit.rate_temp) !== String(row.rate_temp ?? ''))
+                  const isSaving = savingId === row.id
+                  return (
+                    <tr key={row.id} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                      <td style={{ padding: '12px 24px', fontSize: '14px', fontWeight: 600, color: colors.textDark }}>{row.land_use}</td>
+                      <td style={{ padding: '12px 24px' }}>
+                        <input type="number" inputMode="decimal" value={edit.rate_perm !== undefined ? edit.rate_perm : (row.rate_perm ?? '')} onChange={(e) => updateField(row.id, 'rate_perm', e.target.value)} style={{ width: '120px', padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px' }} />
+                      </td>
+                      <td style={{ padding: '12px 24px' }}>
+                        <input type="number" inputMode="decimal" value={edit.rate_temp !== undefined ? edit.rate_temp : (row.rate_temp ?? '')} onChange={(e) => updateField(row.id, 'rate_temp', e.target.value)} style={{ width: '120px', padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px' }} />
+                      </td>
+                      <td style={{ padding: '12px 24px', fontSize: '12px', color: colors.textMuted }}>{row.updated_at ? new Date(row.updated_at).toLocaleString() : '—'}</td>
+                      <td style={{ padding: '12px 24px', textAlign: 'right' }}>
+                        <button onClick={() => saveRow(row)} disabled={!dirty || isSaving} style={{
+                          padding: '8px 14px',
+                          backgroundColor: dirty && !isSaving ? colors.success : colors.bgLight,
+                          color: dirty && !isSaving ? 'white' : colors.textMuted,
+                          border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+                          cursor: dirty && !isSaving ? 'pointer' : 'not-allowed',
+                          boxShadow: dirty && !isSaving ? `0 2px 8px ${colors.success}55` : 'none'
+                        }}>
+                          {isSaving ? 'Saving…' : 'Save & Propagate'}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${colors.border}`, backgroundColor: colors.bgLight }}>
+          <p style={{ fontSize: '12px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>Add New Land Use</p>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <input type="text" placeholder="Land use (e.g. Inst.)" value={newLandUse} onChange={(e) => setNewLandUse(e.target.value)} style={{ padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px', width: '160px' }} />
+            <input type="number" inputMode="decimal" placeholder="Perm rate" value={newPerm} onChange={(e) => setNewPerm(e.target.value)} style={{ padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px', width: '120px' }} />
+            <input type="number" inputMode="decimal" placeholder="Temp rate" value={newTemp} onChange={(e) => setNewTemp(e.target.value)} style={{ padding: '8px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px', width: '120px' }} />
+            <button onClick={addRate} disabled={adding || !newLandUse.trim()} style={{ padding: '8px 14px', backgroundColor: adding ? colors.bgLight : colors.accent, color: adding ? colors.textMuted : 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: adding || !newLandUse.trim() ? 'not-allowed' : 'pointer' }}>
+              {adding ? 'Adding…' : 'Add'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Merge PAPs Modal — admin tool, field-by-field
+const MERGE_FIELDS = [
+  { key: 'file_number', label: 'File Number' },
+  { key: 'household_head_first_name', label: 'First Name' },
+  { key: 'household_head_surname', label: 'Surname' },
+  { key: 'gender', label: 'Gender' },
+  { key: 'id_number', label: 'ID Number' },
+  { key: 'cellphone_no', label: 'Phone' },
+  { key: 'occupation_of_pap', label: 'Occupation' },
+  { key: 'community_council', label: 'Community Council' },
+  { key: 'original_village', label: 'Original Village' },
+  { key: 'current_village', label: 'Current Village' },
+  { key: 'route_name', label: 'Route' },
+  { key: 'route_type', label: 'Route Type' },
+  { key: 'route_code', label: 'Route Code' },
+  { key: 'land_use', label: 'Land Use' },
+  { key: 'gps_coordinates', label: 'GPS' },
+  { key: 'latitude', label: 'Latitude' },
+  { key: 'longitude', label: 'Longitude' },
+  { key: 'photograph_of_pap_url', label: 'PAP Photo URL' },
+  { key: 'id_document_url', label: 'ID Document URL' },
+  { key: 'asset_photo_url', label: 'Asset Photo URL' },
+  { key: 'map_url', label: 'Map URL' },
+  { key: 'verification_status', label: 'Verification Status' },
+  { key: 'approval_status', label: 'Approval Status' },
+  { key: 'admin_notes', label: 'Admin Notes' },
+  { key: 'disturbance_allowance', label: 'Disturbance Allowance (M)' },
+  { key: 'total_compensation', label: 'Total Compensation (M)' },
+  { key: 'caf_document', label: 'CAF Document', type: 'object' },
+  { key: 'payment_status', label: 'Payment Status' },
+  { key: 'paid_amount', label: 'Paid Amount (M)' },
+  { key: 'paid_at', label: 'Paid At' },
+  { key: 'payment_reference', label: 'Payment Reference' },
+]
+
+function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, merging, onCancel, onConfirm, colors }) {
+  const [search, setSearch] = useState('')
+  const [choices, setChoices] = useState({}) // field → 'winner' | 'loser'
+
+  const candidates = households.filter(h => h.id !== winner.id).filter(h => {
+    if (!search) return true
+    const s = search.toLowerCase()
+    return [h.household_head_first_name, h.household_head_surname, h.id_number, h.file_number, h.route_name]
+      .some(v => v?.toLowerCase().includes(s))
+  }).slice(0, 50)
+
+  const sameValue = (a, b) => {
+    if (a == null && b == null) return true
+    if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b)
+    return String(a ?? '') === String(b ?? '')
+  }
+  const fmt = (v) => {
+    if (v == null || v === '') return '—'
+    if (typeof v === 'object') return v.name || JSON.stringify(v).slice(0, 50)
+    return String(v)
+  }
+
+  const buildScalarUpdates = () => {
+    if (!mergeTarget) return {}
+    const updates = {}
+    MERGE_FIELDS.forEach(({ key }) => {
+      const w = winner[key]
+      const l = mergeTarget[key]
+      if (sameValue(w, l)) return
+      const choice = choices[key] || 'winner' // default to keeping the surviving (winner) value
+      updates[key] = choice === 'loser' ? l : w
+    })
+    return updates
+  }
+
+  // Step 1 — picking the merge target
+  if (!mergeTarget) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '720px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Merge with Another PAP</h2>
+              <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>This PAP <strong>{winner.household_head_first_name} {winner.household_head_surname}</strong> ({winner.file_number || 'no file no.'}) will be kept.</p>
+            </div>
+            <button onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+          </div>
+          <div style={{ padding: '16px 24px', borderBottom: `1px solid ${colors.border}` }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
+              <input type="text" placeholder="Search by name, ID, file number, route…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: '100%', padding: '10px 14px 10px 44px', border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+            </div>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+            {candidates.length === 0 ? (
+              <p style={{ padding: '40px', textAlign: 'center', color: colors.textMuted }}>No matching PAPs.</p>
+            ) : candidates.map(c => (
+              <button key={c.id} onClick={() => setMergeTarget(c)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '12px 24px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', borderBottom: `1px solid ${colors.border}` }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = colors.bgLight}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                <p style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: colors.textDark }}>{c.household_head_first_name} {c.household_head_surname}</p>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: colors.textMuted }}>{c.file_number || '—'} • {c.route_name || '—'} • ID {c.id_number || '—'}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Step 2 — field-by-field comparison
+  const winnerArrCounts = {
+    land_assets_json: (winner.land_assets_json || []).length,
+    other_assets_json: (winner.other_assets_json || []).length,
+    other_documents: (winner.other_documents || []).length,
+    payment_documents: (winner.payment_documents || []).length,
+    comments: (winner.comments || []).length,
+  }
+  const loserArrCounts = {
+    land_assets_json: (mergeTarget.land_assets_json || []).length,
+    other_assets_json: (mergeTarget.other_assets_json || []).length,
+    other_documents: (mergeTarget.other_documents || []).length,
+    payment_documents: (mergeTarget.payment_documents || []).length,
+    comments: (mergeTarget.comments || []).length,
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '960px', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Choose Values to Keep</h2>
+            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>For each differing field, pick which value the merged PAP should keep. Lists (assets, documents, comments) are always combined.</p>
+          </div>
+          <button onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+        </div>
+        <div style={{ padding: '14px 24px', borderBottom: `1px solid ${colors.border}`, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', backgroundColor: colors.bgLight }}>
+          <div style={{ padding: '10px 14px', backgroundColor: `${colors.success}10`, borderRadius: '8px' }}>
+            <p style={{ fontSize: '11px', color: colors.success, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>Surviving PAP (kept)</p>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: colors.textDark, margin: '4px 0 0 0' }}>{winner.household_head_first_name} {winner.household_head_surname}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{winner.file_number || '—'}</p>
+          </div>
+          <div style={{ padding: '10px 14px', backgroundColor: `${colors.error}10`, borderRadius: '8px' }}>
+            <p style={{ fontSize: '11px', color: colors.error, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>Other PAP (will be deleted)</p>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: colors.textDark, margin: '4px 0 0 0' }}>{mergeTarget.household_head_first_name} {mergeTarget.household_head_surname}</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '2px 0 0 0' }}>{mergeTarget.file_number || '—'}</p>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px' }}>
+          {MERGE_FIELDS.map(({ key, label }) => {
+            const w = winner[key], l = mergeTarget[key]
+            if (sameValue(w, l)) return null
+            const chosen = choices[key] || 'winner'
+            return (
+              <div key={key} style={{ padding: '12px 0', borderBottom: `1px solid ${colors.border}` }}>
+                <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>{label}</p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  {[
+                    { side: 'winner', source: w, color: colors.success, recordLabel: 'Kept PAP' },
+                    { side: 'loser', source: l, color: colors.error, recordLabel: 'Other PAP' },
+                  ].map(({ side, source, color, recordLabel }) => {
+                    const isChosen = chosen === side
+                    return (
+                      <button key={side} onClick={() => setChoices(p => ({ ...p, [key]: side }))} style={{
+                        textAlign: 'left', cursor: 'pointer', padding: '10px 14px',
+                        backgroundColor: isChosen ? `${color}15` : colors.bgCard,
+                        border: `2px solid ${isChosen ? color : colors.border}`,
+                        borderRadius: '10px',
+                      }}>
+                        <p style={{ fontSize: '11px', color, fontWeight: 700, textTransform: 'uppercase', margin: '0 0 4px 0' }}>{recordLabel} {isChosen && '✓'}</p>
+                        <p style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, margin: 0, wordBreak: 'break-word' }}>{fmt(source)}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          {/* Combined arrays summary */}
+          <div style={{ padding: '12px 0' }}>
+            <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>Combined Lists (all items kept)</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+              {[
+                ['Land Assets', 'land_assets_json'],
+                ['Other Assets', 'other_assets_json'],
+                ['Other Documents', 'other_documents'],
+                ['Payment Documents', 'payment_documents'],
+                ['Comments', 'comments'],
+              ].map(([label, k]) => (
+                <div key={k} style={{ padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '10px', backgroundColor: colors.bgLight }}>
+                  <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>{label}</p>
+                  <p style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, margin: '4px 0 0 0' }}>{winnerArrCounts[k]} + {loserArrCounts[k]} = {winnerArrCounts[k] + loserArrCounts[k]}</p>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '10px 0 0 0' }}>Beneficiaries, co-owners, banking details, household assets, and edit requests linked to the other PAP will be reassigned to the surviving PAP.</p>
+          </div>
+        </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+          <button onClick={() => setMergeTarget(null)} disabled={merging} style={{ padding: '10px 16px', backgroundColor: colors.bgLight, color: colors.textDark, border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>← Pick a different PAP</button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={onCancel} disabled={merging} style={{ padding: '10px 16px', backgroundColor: colors.bgLight, color: colors.textDark, border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={() => {
+              if (!confirm(`Merge "${mergeTarget.household_head_first_name} ${mergeTarget.household_head_surname}" into "${winner.household_head_first_name} ${winner.household_head_surname}"?\n\nThe other PAP will be deleted. This cannot be undone.`)) return
+              onConfirm(buildScalarUpdates())
+            }} disabled={merging} style={{ padding: '10px 18px', backgroundColor: merging ? colors.bgLight : colors.success, color: merging ? colors.textMuted : 'white', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700, cursor: merging ? 'wait' : 'pointer', boxShadow: merging ? 'none' : `0 2px 8px ${colors.success}55` }}>
+              {merging ? 'Merging…' : 'Confirm Merge'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function DocumentPreviewModal({ doc, onClose, colors }) {
   const ext = (doc.file_type || doc.name?.split('.').pop() || '').toLowerCase()
   const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
