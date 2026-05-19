@@ -2946,8 +2946,10 @@ function PhotoFrame({ label, field, url, onUpload, colors }) {
 function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) {
   const [queue, setQueue] = useState([])
   const [uploading, setUploading] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
   const fileRef = useRef(null)
   const folderRef = useRef(null)
+  const dragCounter = useRef(0)
 
   const addFiles = (files) => {
     const newItems = Array.from(files).filter(f => f.size > 0).map(f => ({
@@ -2961,6 +2963,24 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
   }
 
   const removeFromQueue = (index) => setQueue(prev => prev.filter((_, i) => i !== index))
+
+  const handleDragEnter = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    dragCounter.current++
+    if (e.dataTransfer?.items?.length > 0) setIsDragging(true)
+  }
+  const handleDragLeave = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    dragCounter.current = Math.max(0, dragCounter.current - 1)
+    if (dragCounter.current === 0) setIsDragging(false)
+  }
+  const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation() }
+  const handleDrop = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    dragCounter.current = 0
+    setIsDragging(false)
+    if (e.dataTransfer?.files?.length > 0) addFiles(e.dataTransfer.files)
+  }
 
   const handleUploadAll = async () => {
     const toUpload = queue.filter(q => !q.done)
@@ -2991,7 +3011,20 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
   const btnStyle = (bg) => ({ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 16px', backgroundColor: bg, border: 'none', borderRadius: '8px', color: 'white', fontSize: '13px', fontWeight: '700', cursor: 'pointer', flex: 1 })
 
   return (
-    <div>
+    <div
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
+        position: 'relative',
+        borderRadius: '12px',
+        padding: isDragging ? '8px' : '0',
+        backgroundColor: isDragging ? `${colors.accent}10` : 'transparent',
+        border: isDragging ? `2px dashed ${colors.accent}` : '2px dashed transparent',
+        transition: 'background-color 0.15s, border-color 0.15s, padding 0.15s'
+      }}
+    >
       {/* Existing documents */}
       {documents.length > 0 ? (
         <div style={{ display: 'grid', gap: '10px', marginBottom: '16px', maxHeight: '400px', overflowY: 'auto' }}>
@@ -3011,9 +3044,20 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
           ))}
         </div>
       ) : queue.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '24px', color: colors.textLight, marginBottom: '16px' }}>
-          <FileUp size={32} style={{ opacity: 0.3, marginBottom: '8px' }} />
-          <p style={{ fontSize: '13px', margin: 0 }}>No documents uploaded yet</p>
+        <div style={{
+          textAlign: 'center',
+          padding: '32px 24px',
+          color: isDragging ? colors.accent : colors.textLight,
+          marginBottom: '16px',
+          borderRadius: '10px',
+          border: `2px dashed ${isDragging ? colors.accent : colors.border}`,
+          backgroundColor: isDragging ? `${colors.accent}10` : colors.bgLight,
+          transition: 'all 0.15s'
+        }}>
+          <FileUp size={32} style={{ opacity: isDragging ? 1 : 0.4, marginBottom: '8px', color: isDragging ? colors.accent : 'inherit' }} />
+          <p style={{ fontSize: '13px', margin: 0, fontWeight: isDragging ? '700' : '500' }}>
+            {isDragging ? 'Drop files to upload' : 'Drag & drop files here, or use the buttons below'}
+          </p>
         </div>
       ) : null}
 
