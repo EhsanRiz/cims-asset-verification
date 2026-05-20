@@ -1757,10 +1757,11 @@ export default function Dashboard() {
                           { label: 'Land Use' },
                           { label: 'Documents' },
                           { label: 'CAF' },
+                          { label: 'Payment' },
                           { label: '' },
                         ].map((header, i) => (
                           <th key={i} style={{ 
-                            padding: '14px 20px', textAlign: i === 5 ? 'right' : 'left', 
+                            padding: '14px 20px', textAlign: i === 6 ? 'right' : 'left', 
                             fontSize: '11px', fontWeight: '700', color: colors.textMuted, 
                             textTransform: 'uppercase', letterSpacing: '0.5px',
                             borderBottom: `1px solid ${colors.border}`,
@@ -1809,6 +1810,13 @@ export default function Dashboard() {
                               ) : (
                                 <span style={{ color: colors.warning, fontSize: '13px', fontWeight: '600' }}>● Unsigned</span>
                               )
+                            ) : (
+                              <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '16px 20px' }}>
+                            {pap.payment_documents?.length > 0 ? (
+                              <span style={{ color: colors.success, fontSize: '13px', fontWeight: '600' }}>✓ {pap.payment_documents.length}</span>
                             ) : (
                               <span style={{ color: colors.textLight, fontSize: '13px' }}>-</span>
                             )}
