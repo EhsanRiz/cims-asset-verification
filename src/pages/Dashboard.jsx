@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../App'
-import { supabase } from '../lib/supabase'
+import { supabase, ROLE_LABELS } from '../lib/supabase'
 import { 
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
@@ -74,9 +74,17 @@ export default function Dashboard() {
   const [editedData, setEditedData] = useState({})
   const [saving, setSaving] = useState(false)
 
-  const isAdmin = user?.role === 'Admin' || user?.role === 'admin'
+  // Role taxonomy (see src/lib/supabase.js):
+  //   admin                                    → full access
+  //   user (Mamokuena)                          → editor (legacy approver)
+  //   clo, arco, rco, essm                      → editor (can add/edit PAPs)
+  //   assistant_clo, pm, ict_dmo, client        → view-only
+  const _role = (user?.role || '').toLowerCase()
+  const isAdmin = _role === 'admin'
   const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
-  const canApprove = isAdmin || isMamokuena
+  const isViewOnly = ['assistant_clo', 'pm', 'ict_dmo', 'client'].includes(_role)
+  const canEdit = !isViewOnly  // admin, user, clo, arco, rco, essm all get edit rights
+  const canApprove = isAdmin || isMamokuena || ['clo', 'arco', 'rco', 'essm'].includes(_role)
 
   // Notifications state
   const [notifications, setNotifications] = useState([])
@@ -1477,7 +1485,7 @@ export default function Dashboard() {
             </div>
             <div className="user-info" style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
-              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{user?.role}{canApprove ? ' • Can Approve' : ''}</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{ROLE_LABELS[(user?.role || '').toLowerCase()] || user?.role}{canApprove ? ' • Can Approve' : isViewOnly ? ' • View Only' : ''}</span>
             </div>
             {isAdmin && (
               <button onClick={() => setShowRatesModal(true)}
@@ -1891,6 +1899,8 @@ export default function Dashboard() {
               editedData={editedData}
               editMode={editMode}
               isAdmin={isAdmin}
+              canEdit={canEdit}
+              isViewOnly={isViewOnly}
               saving={saving}
               activeTab={activeTab}
               setActiveTab={setActiveTab}
@@ -2263,7 +2273,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2304,10 +2314,10 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          {!editMode && (
-            <button onClick={() => setEditMode(true)} style={{ 
-              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
-              backgroundColor: colors.warning, color: 'white', 
+          {!editMode && canEdit && (
+            <button onClick={() => setEditMode(true)} style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
+              backgroundColor: colors.warning, color: 'white',
               border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
               boxShadow: '0 2px 8px rgba(245, 158, 11, 0.3)'
             }}>
@@ -2349,17 +2359,17 @@ function DetailView({ household, editedData, editMode, isAdmin, saving, activeTa
           }} title="Refresh data">
             <RefreshCw size={16} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
           </button>
-          {!editMode && (
-            <button onClick={() => onDeletePAP(household)} style={{ 
-              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px', 
-              backgroundColor: colors.error, color: 'white', 
+          {!editMode && canEdit && (
+            <button onClick={() => onDeletePAP(household)} style={{
+              display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
+              backgroundColor: colors.error, color: 'white',
               border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
               boxShadow: '0 2px 8px rgba(239, 68, 68, 0.3)'
             }}>
               <Trash2 size={16} /> {isAdmin ? 'Delete' : 'Request Delete'}
             </button>
           )}
-          {!editMode && (
+          {!editMode && canEdit && (
             <button onClick={() => { setSelectedNewRoute(''); setShowMoveModal(true) }} style={{
               display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 18px',
               backgroundColor: colors.primary, color: 'white',

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ClipboardList, Users, LogOut, MapPin, Database, Bell } from 'lucide-react'
 import { useAuth } from '../App'
-import { supabase } from '../lib/supabase'
+import { supabase, ROLE_LABELS } from '../lib/supabase'
 
 const colors = {
   primary: '#1a3a4a',
@@ -19,9 +19,11 @@ export default function Landing() {
   const navigate = useNavigate()
   const [pendingCount, setPendingCount] = useState(0)
 
-  // Approvers: admins + Mamokuena (who is role='user' with the special override)
+  // Approvers: admins + Mamokuena (legacy role='user' override) + editor roles from the GRM role system.
+  const _r = (user?.role || '').toLowerCase()
   const isApprover =
-    user?.role?.toLowerCase() === 'admin' ||
+    _r === 'admin' ||
+    ['clo', 'arco', 'rco', 'essm'].includes(_r) ||
     (user?.full_name || '').toLowerCase().includes('mamokuena') ||
     (user?.username || '').toLowerCase().includes('mamokuena')
 
@@ -90,7 +92,7 @@ export default function Landing() {
           <div style={{ textAlign: 'right', fontSize: 13 }}>
             <div style={{ fontWeight: 600 }}>{user?.full_name || user?.username}</div>
             <div style={{ opacity: 0.8, fontSize: 11, textTransform: 'uppercase' }}>
-              {user?.role === 'user' ? 'Field Surveyor' : user?.role}
+              {ROLE_LABELS[(user?.role || '').toLowerCase()] || user?.role}
             </div>
           </div>
           <button
