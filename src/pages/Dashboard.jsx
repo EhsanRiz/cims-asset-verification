@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../App'
 import { supabase, ROLE_LABELS } from '../lib/supabase'
+import StaffManagement from '../components/StaffManagement'
 import { 
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
   Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle,
-  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw
+  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw, Settings
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -365,6 +366,8 @@ export default function Dashboard() {
     } else if (view === 'paps') {
       setSelectedRoute(null)
       setListFilter(null)
+      setView('routes')
+    } else if (view === 'settings') {
       setView('routes')
     }
   }
@@ -1496,6 +1499,15 @@ export default function Dashboard() {
                 <TrendingUp size={16} /> Rates
               </button>
             )}
+            {isAdmin && (
+              <button onClick={() => setView('settings')}
+                title="Manage staff users and roles"
+                style={{ padding: '8px 12px', backgroundColor: view === 'settings' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)'}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = view === 'settings' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)'}>
+                <Settings size={16} /> Settings
+              </button>
+            )}
             <button onClick={() => { logout(); window.location.hash = '#/login' }}
               style={{ padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.8)', cursor: 'pointer', transition: 'all 0.2s' }}
               onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.3)'}
@@ -1515,6 +1527,11 @@ export default function Dashboard() {
       <main style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
         <div style={{ maxWidth: '1300px', margin: '0 auto' }}>
           
+          {/* SETTINGS VIEW (admin only) */}
+          {view === 'settings' && isAdmin && (
+            <StaffManagement colors={colors} currentUserEmail={user?.email || user?.auth_email} />
+          )}
+
           {/* ROUTES VIEW */}
           {view === 'routes' && (
             <>
