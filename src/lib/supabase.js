@@ -7,7 +7,13 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
+    // Disabled: with HashRouter, the redirect URL has two `#` signs
+    // (`/#/reset-password#access_token=...`) which the SDK's auto-parse can't reliably
+    // handle. It also races with our own setSession() calls and leaves the auth client
+    // in a stuck state where updateUser() hangs. We manually parse the URL fragment
+    // in ResetPassword.jsx (and will do the same for signup confirmation in Login.jsx
+    // if/when that flow is exercised).
+    detectSessionInUrl: false,
   },
 })
 
