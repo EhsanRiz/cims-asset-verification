@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../App'
-import { supabase, ROLE_LABELS, apiFetch } from '../lib/supabase'
+import { supabase, ROLE_LABELS, apiFetch, logAudit } from '../lib/supabase'
 import StaffManagement from '../components/StaffManagement'
 import { 
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
@@ -372,6 +372,18 @@ export default function Dashboard() {
     }
   }
 
+  // Fire-and-forget audit log entry tied to the current user identity.
+  const audit = (action, household_id, changed_fields) => {
+    if (!household_id) return
+    logAudit({
+      action,
+      household_id,
+      changed_fields,
+      edited_by_id:   user?.id || null,
+      edited_by_name: user?.full_name || user?.username || user?.auth_email || 'Unknown',
+    })
+  }
+
   const openPAPList = (filter) => {
     setSelectedRoute(null)
     setListFilter(filter)
@@ -461,6 +473,7 @@ export default function Dashboard() {
         const updated = households.find(h => h.id === editedData.id)
         if (updated) setSelectedHousehold(updated)
         setEditMode(false)
+        if (Object.keys(changes).length > 0) audit('edit', editedData.id, changes)
         alert('✅ Changes saved successfully!')
       } else {
         // Regular user - submit for approval
@@ -548,6 +561,16 @@ export default function Dashboard() {
           .eq('id', request.household_id)
 
         if (updateError) throw updateError
+
+        // Credit the change to the original requester (the admin's role in
+        // applying it is already tracked on the edit_requests row via reviewed_by).
+        logAudit({
+          action:         'edit',
+          household_id:   request.household_id,
+          changed_fields: request.changes,
+          edited_by_id:   request.requested_by,
+          edited_by_name: request.requested_by_name || 'Unknown',
+        })
       } else {
         // Just clear pending flag
         await supabase
@@ -767,6 +790,7 @@ export default function Dashboard() {
       await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
       setEditedData(prev => ({ ...prev, other_documents: updated }))
+      audit('document_added', selectedHousehold.id, { name: newDoc.name, key: newDoc.key, file_type: newDoc.file_type })
       return true
     } catch (err) {
       console.error('Upload error:', err)
@@ -789,6 +813,7 @@ export default function Dashboard() {
       await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, other_documents: updated }))
       setEditedData(prev => ({ ...prev, other_documents: updated }))
+      audit('document_deleted', selectedHousehold.id, { name: doc?.name || '(unknown)', key: doc?.key || null })
       alert('Document deleted.')
     } catch (err) {
       console.error('Delete error:', err)
@@ -809,6 +834,7 @@ export default function Dashboard() {
       await supabase.from('households').update({ caf_document: cafDoc }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, caf_document: cafDoc }))
       setEditedData(prev => ({ ...prev, caf_document: cafDoc }))
+      audit('caf_uploaded', selectedHousehold.id, { name: cafDoc.name, key: cafDoc.key, file_type: cafDoc.file_type })
       alert('✅ CAF uploaded successfully!')
     } catch (err) {
       console.error('CAF upload error:', err)
@@ -827,6 +853,7 @@ export default function Dashboard() {
       await supabase.from('households').update({ caf_document: null }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, caf_document: null }))
       setEditedData(prev => ({ ...prev, caf_document: null }))
+      audit('caf_deleted', selectedHousehold.id, { name: caf?.name || null, key: caf?.key || null })
       alert('CAF deleted.')
     } catch (err) {
       console.error('CAF delete error:', err)
@@ -888,6 +915,13 @@ export default function Dashboard() {
       if (fresh) { setSelectedHousehold(fresh); setEditedData({ ...fresh }) }
       setShowMergeModal(false)
       setMergeTarget(null)
+      audit('merged', winnerId, {
+        loser_id:        loserId,
+        loser_name:      `${loser.household_head_first_name || ''} ${loser.household_head_surname || ''}`.trim(),
+        loser_file_no:   loser.file_number || null,
+        loser_route:     loser.route_name || null,
+        winner_name:     `${winner.household_head_first_name || ''} ${winner.household_head_surname || ''}`.trim(),
+      })
       alert('✅ PAPs merged successfully.')
     } catch (err) {
       console.error('Merge error:', err)
@@ -913,6 +947,7 @@ export default function Dashboard() {
       setSelectedHousehold(prev => ({ ...prev, caf_document: updated }))
       setEditedData(prev => ({ ...prev, caf_document: updated }))
       await loadData()
+      audit('caf_signed_toggled', selectedHousehold.id, { signed: !!signed })
     } catch (err) {
       console.error('CAF mark error:', err)
       alert('Update failed: ' + err.message)
@@ -932,6 +967,7 @@ export default function Dashboard() {
       await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, payment_documents: updated }))
       setEditedData(prev => ({ ...prev, payment_documents: updated }))
+      audit('payment_doc_added', selectedHousehold.id, { name: newDoc.name, key: newDoc.key, file_type: newDoc.file_type })
       return true
     } catch (err) {
       console.error('Payment doc upload error:', err)
@@ -953,6 +989,7 @@ export default function Dashboard() {
       await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, payment_documents: updated }))
       setEditedData(prev => ({ ...prev, payment_documents: updated }))
+      audit('payment_doc_deleted', selectedHousehold.id, { name: doc?.name || '(unknown)', key: doc?.key || null })
       alert('Payment document deleted.')
     } catch (err) {
       console.error('Payment doc delete error:', err)
@@ -973,9 +1010,17 @@ export default function Dashboard() {
       }
       const { error } = await supabase.from('households').update(updates).eq('id', selectedHousehold.id)
       if (error) throw error
+      // Build a diff: only fields that actually changed.
+      const paymentDiff = {}
+      for (const k of ['payment_status','paid_amount','paid_at','payment_reference']) {
+        const oldVal = selectedHousehold?.[k] ?? null
+        const newVal = updates[k] ?? null
+        if (String(oldVal ?? '') !== String(newVal ?? '')) paymentDiff[k] = { old: oldVal, new: newVal }
+      }
       setSelectedHousehold(prev => ({ ...prev, ...updates }))
       setEditedData(prev => ({ ...prev, ...updates }))
       await loadData()
+      if (Object.keys(paymentDiff).length > 0) audit('payment_updated', selectedHousehold.id, paymentDiff)
       alert('Payment details updated.')
     } catch (err) {
       console.error('Payment update error:', err)
@@ -1066,7 +1111,15 @@ export default function Dashboard() {
       await loadData()
       setShowAddPAP(false)
       setNewPAPData({})
-      if (inserted) { setSelectedHousehold(inserted); setEditedData({ ...inserted }); setView('detail'); setActiveTab('details') }
+      if (inserted) {
+        setSelectedHousehold(inserted); setEditedData({ ...inserted }); setView('detail'); setActiveTab('details')
+        audit('created', inserted.id, {
+          household_head_first_name: { old: null, new: inserted.household_head_first_name },
+          household_head_surname:    { old: null, new: inserted.household_head_surname },
+          route_name:                { old: null, new: inserted.route_name },
+          file_number:               { old: null, new: inserted.file_number },
+        })
+      }
       alert('✅ New PAP added successfully!')
     } catch (err) {
       console.error('Error adding PAP:', err)
@@ -2612,6 +2665,10 @@ function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, 
             <DocumentUploader documents={data.payment_documents || []} onUpload={onPaymentDocUpload} onDelete={onDeletePaymentDoc} onPreview={onPreviewDoc} colors={colors} />
           </Card>
         </div>
+      )}
+
+      {activeTab === 'history' && (
+        <HistoryTab household={household} colors={colors} />
       )}
     </div>
   )

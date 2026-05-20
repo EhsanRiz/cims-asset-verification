@@ -120,6 +120,31 @@ export async function signOut() {
 }
 
 /**
+ * Insert a row into pap_audit_log. Fire-and-forget by design — audit logging
+ * should never block or fail a user action. Errors are logged to the console
+ * but swallowed.
+ *
+ *   await logAudit({
+ *     household_id, action, changed_fields, edited_by_id, edited_by_name, source?
+ *   })
+ */
+export async function logAudit({ household_id, action, changed_fields, edited_by_id, edited_by_name, source }) {
+  try {
+    const { error } = await supabase.from('pap_audit_log').insert({
+      household_id,
+      action,
+      changed_fields: changed_fields || {},
+      edited_by:      edited_by_id || null,
+      edited_by_name: edited_by_name || 'Unknown',
+      source:         source || 'dashboard',
+    })
+    if (error) console.warn('logAudit insert failed:', error.message)
+  } catch (e) {
+    console.warn('logAudit threw:', e?.message)
+  }
+}
+
+/**
  * Wrapper around fetch() that attaches the current Supabase session's
  * access token as the Authorization: Bearer header. Use this for any
  * call to the CIMS Express server's /api/* endpoints — the server
