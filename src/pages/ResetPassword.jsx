@@ -15,18 +15,61 @@ export default function ResetPassword() {
   const [hasRecoverySession, setHasRecoverySession] = useState(false)
 
   useEffect(() => {
-    // Supabase Auth places the recovery tokens in the URL hash on the redirect; the SDK
-    // (with detectSessionInUrl: true) automatically establishes a session and fires PASSWORD_RECOVERY.
+    // Supabase Auth places the recovery tokens in the URL hash on redirect. With HashRouter,
+    // the URL ends up looking like `/#/reset-password#access_token=...&type=recovery&...` —
+    // two `#` signs. The SDK's `detectSessionInUrl` auto-parse can't reliably handle the
+    // double-hash, so we extract the tokens ourselves and call setSession directly.
+    let mounted = true
+
+    const extractTokens = () => {
+      const hash = window.location.hash || ''
+      const lastHashIdx = hash.lastIndexOf('#')
+      // Need at least two hashes (one for HashRouter route, one for the tokens)
+      if (lastHashIdx <= 0) return null
+      const fragment = hash.substring(lastHashIdx + 1)
+      if (!fragment.includes('access_token')) return null
+      const params = new URLSearchParams(fragment)
+      return {
+        access_token:  params.get('access_token'),
+        refresh_token: params.get('refresh_token') || '',
+        type:          params.get('type'),
+      }
+    }
+
+    const init = async () => {
+      const tokens = extractTokens()
+      if (tokens?.access_token) {
+        const { error } = await supabase.auth.setSession({
+          access_token:  tokens.access_token,
+          refresh_token: tokens.refresh_token,
+        })
+        if (!error && mounted) {
+          setHasRecoverySession(true)
+          // Clean the address bar so a refresh doesn't try to re-consume the token.
+          window.history.replaceState(null, '', '#/reset-password')
+          return
+        }
+        if (error) console.error('setSession failed for recovery token:', error)
+      }
+      // Fallback: SDK auto-detect may have already established a session.
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session && mounted) setHasRecoverySession(true)
+    }
+
+    init()
+
+    // Also subscribe — covers the case where the SDK fires PASSWORD_RECOVERY late
+    // (e.g. on a single-hash URL from a different routing setup).
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') {
+      if (mounted && (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN')) {
         setHasRecoverySession(true)
       }
     })
-    // Also check current session immediately in case the event fired before we mounted.
-    supabase.auth.getSession().then(({ data }) => {
-      if (data?.session) setHasRecoverySession(true)
-    })
-    return () => subscription?.subscription?.unsubscribe?.()
+
+    return () => {
+      mounted = false
+      subscription?.subscription?.unsubscribe?.()
+    }
   }, [])
 
   const handleSubmit = async (e) => {
