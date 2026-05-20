@@ -141,7 +141,12 @@ export async function apiFetch(path, options = {}) {
  * Returns null if either piece is missing.
  */
 export async function loadCurrentUserProfile() {
-  const { data: { user: authUser } } = await supabase.auth.getUser()
+  // Use getSession (purely localStorage read) rather than getUser (network round-trip
+  // + acquires the same auth lock used by onAuthStateChange). getUser inside the
+  // initial-load path deadlocks with the SDK's own session restore in supabase-js v2
+  // — see https://supabase.com/docs/reference/javascript/auth-onauthstatechange
+  const { data: { session } } = await supabase.auth.getSession()
+  const authUser = session?.user
   if (!authUser) return null
 
   const { data: row, error } = await supabase

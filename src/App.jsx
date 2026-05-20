@@ -34,18 +34,35 @@ function AuthProvider({ children }) {
     // Initial load.
     refresh().finally(() => { if (active) setLoading(false) })
 
+    // Safety watchdog: if refresh somehow never resolves (Supabase outage, network
+    // wedge, future SDK bug), force loading=false after 5s so the user lands on the
+    // login page instead of an infinite spinner.
+    const watchdog = setTimeout(() => {
+      if (active) setLoading(prev => (prev ? false : prev))
+    }, 5000)
+
     // React to sign-in / sign-out / token refresh from Supabase Auth.
-    const { data: sub } = supabase.auth.onAuthStateChange(async (event) => {
+    //
+    // CRITICAL: do not await async work directly inside this listener — the SDK
+    // holds an internal lock while the callback runs, and awaiting getUser /
+    // getSession inside it produces a silent deadlock that leaves the app stuck
+    // on the loading spinner. We dispatch the refresh via setTimeout(..., 0) so
+    // it runs on the next tick after the SDK has released its lock. See:
+    // https://supabase.com/docs/reference/javascript/auth-onauthstatechange
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
         if (active) setUser(null)
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-        await refresh()
+        setTimeout(() => { if (active) refresh() }, 0)
       }
       // PASSWORD_RECOVERY is handled by ResetPassword.jsx; no global state change.
+      // INITIAL_SESSION is intentionally ignored — refresh() already runs from the
+      // initial load above.
     })
 
     return () => {
       active = false
+      clearTimeout(watchdog)
       sub?.subscription?.unsubscribe?.()
     }
   }, [])
