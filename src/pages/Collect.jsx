@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
-import { supabase } from '../lib/supabase'
+import { supabase, apiFetch } from '../lib/supabase'
 import {
   MapPin, Home, Users, UserPlus, CreditCard, CheckCircle2, Camera,
   Upload, Plus, Trash2, ArrowLeft, ArrowRight, LogOut, Check, X,
@@ -244,7 +244,7 @@ export default function Collect() {
     fd.append('routeName', routeSel || 'collect')
     fd.append('papName', `${hh.household_head_first_name || 'x'}_${hh.household_head_surname || 'x'}`)
     fd.append('category', category)
-    const resp = await fetch('/api/upload', { method: 'POST', body: fd })
+    const resp = await apiFetch('/api/upload', { method: 'POST', body: fd })
     if (!resp.ok) throw new Error('Upload failed')
     return resp.json()
   }

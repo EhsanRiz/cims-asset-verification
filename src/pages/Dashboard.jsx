@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../App'
-import { supabase, ROLE_LABELS } from '../lib/supabase'
+import { supabase, ROLE_LABELS, apiFetch } from '../lib/supabase'
 import StaffManagement from '../components/StaffManagement'
 import { 
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
@@ -727,7 +727,7 @@ export default function Dashboard() {
     formData.append('papName', `${pap?.household_head_first_name || ''}_${pap?.household_head_surname || ''}`.trim() || 'unknown')
     formData.append('category', category)
 
-    const resp = await fetch('/api/upload', { method: 'POST', body: formData })
+    const resp = await apiFetch('/api/upload', { method: 'POST', body: formData })
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}))
       throw new Error(err.error || 'Upload failed')
@@ -783,7 +783,7 @@ export default function Dashboard() {
       const doc = existing[index]
       // Delete from R2 if we have the key
       if (doc?.key) {
-        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
+        await apiFetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
       }
       const updated = existing.filter((_, i) => i !== index)
       await supabase.from('households').update({ other_documents: updated }).eq('id', selectedHousehold.id)
@@ -801,7 +801,7 @@ export default function Dashboard() {
     try {
       const oldCAF = selectedHousehold.caf_document
       if (oldCAF?.key) {
-        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: oldCAF.key }) }).catch(() => {})
+        await apiFetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: oldCAF.key }) }).catch(() => {})
       }
       const result = await uploadToR2(file, 'caf')
       const fileExt = file.name.split('.').pop() || 'pdf'
@@ -822,7 +822,7 @@ export default function Dashboard() {
     try {
       const caf = selectedHousehold.caf_document
       if (caf?.key) {
-        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: caf.key }) }).catch(() => {})
+        await apiFetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: caf.key }) }).catch(() => {})
       }
       await supabase.from('households').update({ caf_document: null }).eq('id', selectedHousehold.id)
       setSelectedHousehold(prev => ({ ...prev, caf_document: null }))
@@ -947,7 +947,7 @@ export default function Dashboard() {
       const existing = selectedHousehold.payment_documents || []
       const doc = existing[index]
       if (doc?.key) {
-        await fetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
+        await apiFetch('/api/delete', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: doc.key }) }).catch(() => {})
       }
       const updated = existing.filter((_, i) => i !== index)
       await supabase.from('households').update({ payment_documents: updated }).eq('id', selectedHousehold.id)

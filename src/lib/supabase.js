@@ -120,6 +120,23 @@ export async function signOut() {
 }
 
 /**
+ * Wrapper around fetch() that attaches the current Supabase session's
+ * access token as the Authorization: Bearer header. Use this for any
+ * call to the CIMS Express server's /api/* endpoints — the server
+ * gates upload/delete on a valid CIMS user JWT.
+ *
+ *   const resp = await apiFetch('/api/upload', { method: 'POST', body: formData })
+ */
+export async function apiFetch(path, options = {}) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers = new Headers(options.headers || {})
+  if (session?.access_token) {
+    headers.set('Authorization', `Bearer ${session.access_token}`)
+  }
+  return fetch(path, { ...options, headers })
+}
+
+/**
  * Load the current user's merged profile: Supabase Auth user + linked system_users row.
  * Returns null if either piece is missing.
  */
