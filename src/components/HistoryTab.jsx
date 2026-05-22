@@ -92,7 +92,35 @@ export default function HistoryTab({ household, colors }) {
         if (!cancelled) setLoading(false)
       }
     })()
-    return () => { cancelled = true }
+
+    // Subscribe to live INSERTs for this household so the user sees changes
+    // appear without having to refresh. RLS still applies on the realtime channel.
+    const channel = supabase
+      .channel(`pap_audit_log:${household.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event:  'INSERT',
+          schema: 'public',
+          table:  'pap_audit_log',
+          filter: `household_id=eq.${household.id}`,
+        },
+        (payload) => {
+          if (cancelled) return
+          setRows(prev => {
+            // Dedupe — the initial fetch may already include this row if it
+            // landed between query and subscribe (or on re-subscribe).
+            if (prev.some(r => r.id === payload.new.id)) return prev
+            return [payload.new, ...prev]
+          })
+        }
+      )
+      .subscribe()
+
+    return () => {
+      cancelled = true
+      supabase.removeChannel(channel)
+    }
   }, [household?.id])
 
   return (
