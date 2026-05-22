@@ -937,9 +937,19 @@ export default function Dashboard() {
         if (reErr) throw new Error(`Failed reassigning ${tbl}: ${reErr.message}`)
       }
 
-      // 3. Delete the loser
-      const { error: delErr } = await supabase.from('households').delete().eq('id', loserId)
+      // 3. Delete the loser via the merge_delete_household RPC.
+      // RLS DELETE on households is admin-only by design (non-admins use the
+      // request-delete workflow). Merging is different — any editor role that
+      // can perform the merge should be able to delete the loser as part of
+      // the atomic operation — so this is gated on is_editor() server-side
+      // and runs as SECURITY DEFINER. The RPC returns the affected row count
+      // so we can verify the delete actually happened rather than silently
+      // accepting an RLS-blocked zero-row response.
+      const { data: deletedRows, error: delErr } = await supabase.rpc('merge_delete_household', { loser_id: loserId })
       if (delErr) throw delErr
+      if ((deletedRows ?? 0) === 0) {
+        throw new Error('Merge could not delete the other PAP — it may have been already removed, or your account lacks permission. Please refresh and try again.')
+      }
 
       await loadData()
       const { data: fresh } = await supabase.from('households').select('*').eq('id', winnerId).single()
