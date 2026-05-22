@@ -3043,18 +3043,70 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
   const folderRef = useRef(null)
   const dragCounter = useRef(0)
 
-  const addFiles = (files) => {
-    const newItems = Array.from(files).filter(f => f.size > 0).map(f => ({
-      file: f,
-      name: f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') || f.name : f.name,
-      done: false,
-      error: null,
-      uploading: false
-    }))
-    setQueue(prev => [...prev, ...newItems])
+  // Upload a list of items sequentially. Each item gets per-row status feedback
+  // and a clear alert on failure. Called automatically when files are added,
+  // and from the Retry button on a failed item.
+  const uploadItems = async (items) => {
+    if (!items || items.length === 0) return
+    setUploading(true)
+    let okCount = 0
+    const failures = []
+    for (const item of items) {
+      setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'uploading', error: null } : q))
+      try {
+        await onUpload(item.file, item.name)
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done' } : q))
+        okCount++
+      } catch (err) {
+        const msg = err?.message || 'Upload failed'
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: msg } : q))
+        failures.push({ name: item.name, error: msg })
+      }
+    }
+    setUploading(false)
+    if (failures.length > 0) {
+      alert(
+        `⚠️ Upload failed for ${failures.length} file${failures.length > 1 ? 's' : ''}:\n\n` +
+        failures.map(f => `• ${f.name}\n  ${f.error}`).join('\n\n') +
+        '\n\nThe failed files are still in the list — click Retry to try again.'
+      )
+    } else if (okCount > 0) {
+      // Auto-clear completed items so the list doesn't grow indefinitely.
+      setTimeout(() => {
+        setQueue(prev => prev.filter(q => q.status !== 'done'))
+      }, 1800)
+    }
   }
 
-  const removeFromQueue = (index) => setQueue(prev => prev.filter((_, i) => i !== index))
+  // Generate a unique id for each enqueued item so status updates can match
+  // even after array reorders or partial clears.
+  const newId = () =>
+    (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(36).slice(2)}`
+
+  const addFiles = (files) => {
+    const newItems = Array.from(files).filter(f => f.size > 0).map(f => ({
+      id: newId(),
+      file: f,
+      name: f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') || f.name : f.name,
+      status: 'pending',
+      error: null,
+    }))
+    if (newItems.length === 0) return
+    setQueue(prev => [...prev, ...newItems])
+    // Auto-upload — no separate "Upload All" click required. Users were getting
+    // confused by the queue staying populated, thinking files had uploaded when
+    // they hadn't.
+    uploadItems(newItems)
+  }
+
+  const removeFromQueue = (id) => setQueue(prev => prev.filter(q => q.id !== id))
+
+  const retryItem = (item) => {
+    if (item.status === 'uploading') return
+    uploadItems([item])
+  }
 
   const handleDragEnter = (e) => {
     e.preventDefault(); e.stopPropagation()
@@ -3074,33 +3126,9 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
     if (e.dataTransfer?.files?.length > 0) addFiles(e.dataTransfer.files)
   }
 
-  const handleUploadAll = async () => {
-    const toUpload = queue.filter(q => !q.done)
-    if (toUpload.length === 0) return
-    setUploading(true)
-    let successCount = 0
-    const updated = [...queue]
-    for (let i = 0; i < updated.length; i++) {
-      if (updated[i].done) continue
-      updated[i] = { ...updated[i], uploading: true }
-      setQueue([...updated])
-      try {
-        await onUpload(updated[i].file, updated[i].name)
-        updated[i] = { ...updated[i], uploading: false, done: true }
-        successCount++
-      } catch (err) {
-        updated[i] = { ...updated[i], uploading: false, error: err.message }
-      }
-      setQueue([...updated])
-    }
-    setUploading(false)
-    if (successCount > 0) {
-      alert(`✅ ${successCount} document${successCount > 1 ? 's' : ''} uploaded!`)
-      setQueue([])
-    }
-  }
-
   const btnStyle = (bg) => ({ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 16px', backgroundColor: bg, border: 'none', borderRadius: '8px', color: 'white', fontSize: '13px', fontWeight: '700', cursor: 'pointer', flex: 1 })
+
+  const errorCount = queue.filter(q => q.status === 'error').length
 
   return (
     <div
@@ -3153,34 +3181,56 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
         </div>
       ) : null}
 
-      {/* Upload queue */}
+      {/* Active upload list (in-progress / failed) */}
       {queue.length > 0 && (
         <div style={{ marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-            <span style={{ fontSize: '13px', fontWeight: '700', color: colors.textDark }}>{queue.filter(q => !q.done).length} file{queue.filter(q => !q.done).length !== 1 ? 's' : ''} ready to upload</span>
-            {!uploading && <button onClick={() => setQueue([])} style={{ fontSize: '12px', color: colors.error, background: 'none', border: 'none', cursor: 'pointer', fontWeight: '600' }}>Clear all</button>}
+            <span style={{ fontSize: '13px', fontWeight: '700', color: colors.textDark }}>
+              {uploading
+                ? `Uploading ${queue.filter(q => q.status === 'uploading' || q.status === 'pending').length} file${queue.filter(q => q.status === 'uploading' || q.status === 'pending').length !== 1 ? 's' : ''}…`
+                : errorCount > 0
+                  ? `${errorCount} file${errorCount > 1 ? 's' : ''} failed — click Retry`
+                  : 'Upload complete'}
+            </span>
+            {!uploading && errorCount > 0 && (
+              <button onClick={() => uploadItems(queue.filter(q => q.status === 'error'))} style={{ fontSize: '12px', color: colors.accent, background: 'none', border: 'none', cursor: 'pointer', fontWeight: '700' }}>Retry all failed</button>
+            )}
           </div>
-          <div style={{ display: 'grid', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
-            {queue.map((item, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderRadius: '8px', backgroundColor: item.done ? `${colors.accent}08` : item.error ? '#fef2f2' : colors.bgLight, border: `1px solid ${item.done ? colors.accent : item.error ? '#fecaca' : colors.border}`, fontSize: '13px' }}>
-                {item.uploading ? (
+          <div style={{ display: 'grid', gap: '6px', maxHeight: '240px', overflowY: 'auto' }}>
+            {queue.map((item) => (
+              <div key={item.id} style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '8px 12px', borderRadius: '8px', fontSize: '13px',
+                backgroundColor: item.status === 'done' ? `${colors.accent}08` : item.status === 'error' ? '#fef2f2' : colors.bgLight,
+                border: `1px solid ${item.status === 'done' ? colors.accent : item.status === 'error' ? '#fecaca' : colors.border}`
+              }}>
+                {item.status === 'uploading' || item.status === 'pending' ? (
                   <div style={{ width: '16px', height: '16px', border: '2px solid #e2e8f0', borderTopColor: colors.accent, borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-                ) : item.done ? (
+                ) : item.status === 'done' ? (
                   <Check size={16} color={colors.accent} style={{ flexShrink: 0 }} />
                 ) : (
-                  <FileText size={16} color={colors.textMuted} style={{ flexShrink: 0 }} />
+                  <X size={16} color="#ef4444" style={{ flexShrink: 0 }} />
                 )}
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: item.done ? colors.accent : colors.textDark, fontWeight: item.done ? '600' : '400' }}>{item.name}</span>
-                <span style={{ fontSize: '11px', color: colors.textMuted, flexShrink: 0 }}>{(item.file.size / 1024).toFixed(0)} KB</span>
-                {!item.done && !item.uploading && (
-                  <button onClick={() => removeFromQueue(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', flexShrink: 0 }}><X size={14} color={colors.textMuted} /></button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: item.status === 'done' ? colors.accent : item.status === 'error' ? '#991b1b' : colors.textDark, fontWeight: item.status === 'done' || item.status === 'error' ? '600' : '400' }}>{item.name}</span>
+                    <span style={{ fontSize: '11px', color: colors.textMuted, flexShrink: 0 }}>{(item.file.size / 1024).toFixed(0)} KB</span>
+                  </div>
+                  {item.status === 'error' && item.error && (
+                    <div style={{ fontSize: '11px', color: '#b91c1c', marginTop: '2px', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                      {item.error}
+                    </div>
+                  )}
+                </div>
+                {item.status === 'error' && (
+                  <button onClick={() => retryItem(item)} disabled={uploading} style={{ background: colors.accent, border: 'none', color: 'white', fontSize: '11px', fontWeight: '700', padding: '4px 10px', borderRadius: '6px', cursor: uploading ? 'not-allowed' : 'pointer', flexShrink: 0 }}>Retry</button>
+                )}
+                {(item.status === 'pending' || item.status === 'error') && (
+                  <button onClick={() => removeFromQueue(item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', flexShrink: 0 }}><X size={14} color={colors.textMuted} /></button>
                 )}
               </div>
             ))}
           </div>
-          <button onClick={handleUploadAll} disabled={uploading} style={{ ...btnStyle(uploading ? '#94a3b8' : colors.accent), marginTop: '10px', width: '100%', padding: '12px' }}>
-            {uploading ? 'Uploading...' : `Upload ${queue.filter(q => !q.done).length} File${queue.filter(q => !q.done).length !== 1 ? 's' : ''}`}
-          </button>
         </div>
       )}
 
@@ -3188,16 +3238,17 @@ function DocumentUploader({ documents, onUpload, onDelete, onPreview, colors }) 
       <div style={{ display: 'flex', gap: '10px' }}>
         <input ref={fileRef} type="file" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
         <input ref={folderRef} type="file" webkitdirectory="" directory="" multiple onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} style={{ display: 'none' }} />
-        <button onClick={() => fileRef.current?.click()} style={btnStyle(colors.urban)}>
+        <button onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...btnStyle(uploading ? '#94a3b8' : colors.urban), opacity: uploading ? 0.7 : 1, cursor: uploading ? 'not-allowed' : 'pointer' }}>
           <Upload size={16} /> Add Files
         </button>
-        <button onClick={() => folderRef.current?.click()} style={btnStyle(colors.primary)}>
+        <button onClick={() => folderRef.current?.click()} disabled={uploading} style={{ ...btnStyle(uploading ? '#94a3b8' : colors.primary), opacity: uploading ? 0.7 : 1, cursor: uploading ? 'not-allowed' : 'pointer' }}>
           <FileUp size={16} /> Add Folder
         </button>
       </div>
     </div>
   )
 }
+
 
 // CAF Uploader component
 function CAFUploader({ caf, onUpload, onDelete, onPreview, onMarkSigned, isAdmin, colors }) {
