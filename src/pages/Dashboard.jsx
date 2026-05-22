@@ -884,13 +884,21 @@ export default function Dashboard() {
     }
   }
 
-  // Merge two PAP records into one — approver tool, field-by-field.
+  // Merge two PAP records into one — approver tool.
   // winnerId stays, loserId is deleted after its FK rows are reassigned.
+  //
+  // PAP-info fields (names, IDs, phone, village, etc.) are kept from the
+  // surviving PAP, falling back to the discarded PAP only when the surviving
+  // PAP's value is blank — so nothing is lost.
+  //
+  // Everything else (location, valuation, documents, payment, comments) is
+  // combined or preserved automatically — see resolveMergeResult below.
+  //
   // When opts.combineAssets is true, the two PAPs are treated as different
   // assets of the same household: each PAP's land valuation + GPS becomes a
   // single entry in the surviving PAP's land_assets_json (multi-asset mode),
   // and the trailing A/B/C suffix is stripped from the surviving file_number.
-  const handleMergePAPs = async (winnerId, loserId, scalarUpdates, opts = {}) => {
+  const handleMergePAPs = async (winnerId, loserId, _ignoredScalarUpdates, opts = {}) => {
     if (!winnerId || !loserId || winnerId === loserId) return
     const { combineAssets = false } = opts
     setMerging(true)
@@ -905,82 +913,14 @@ export default function Dashboard() {
       const loser = rows?.find(r => r.id === loserId)
       if (!winner || !loser) throw new Error('Could not load both PAPs.')
 
-      const concat = (a, b) => [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]
+      const merged = resolveMergeResult(winner, loser, { combineAssets })
+      const arrayUpdates = merged.arrayUpdates
+      const extraScalarUpdates = merged.scalarUpdates
 
-      // Build a land_assets_json entry that captures a PAP's land-valuation
-      // fields plus its GPS coordinates, so a merge preserves per-asset
-      // location data when collapsing A/B/C-suffixed PAPs into one.
-      const buildAssetFromHousehold = (h) => ({
-        land_use:           h.land_use || 'Res',
-        affected_area_perm: h.affected_area_perm ?? '',
-        affected_area_temp: h.affected_area_temp ?? '',
-        rate_perm:          h.rate_perm ?? '',
-        rate_temp:          h.rate_temp ?? '',
-        latitude:           h.latitude ?? null,
-        longitude:          h.longitude ?? null,
-        gps_coordinates:    h.gps_coordinates ?? null,
-      })
-
-      // For each side, expand existing multi-asset entries OR fabricate one
-      // from the legacy single-asset fields (whichever the PAP has).
-      const expandSide = (h) => {
-        const existing = Array.isArray(h.land_assets_json) ? h.land_assets_json : []
-        if (existing.length > 0) {
-          // Backfill GPS on entries that don't carry it so the combined view
-          // still tells us where each asset is.
-          return existing.map(a => ({
-            ...a,
-            latitude:        a.latitude        ?? h.latitude        ?? null,
-            longitude:       a.longitude       ?? h.longitude       ?? null,
-            gps_coordinates: a.gps_coordinates ?? h.gps_coordinates ?? null,
-          }))
-        }
-        const legacyHas = !!(h.affected_area_perm || h.affected_area_temp || h.rate_perm || h.rate_temp || h.land_use)
-        return legacyHas ? [buildAssetFromHousehold(h)] : []
-      }
-
-      let arrayUpdates
-      let extraScalarUpdates = {}
-
-      if (combineAssets) {
-        const combinedAssets = [...expandSide(winner), ...expandSide(loser)]
-        arrayUpdates = {
-          land_assets_json: combinedAssets,
-          other_assets_json: concat(winner.other_assets_json, loser.other_assets_json),
-          other_documents:  concat(winner.other_documents,  loser.other_documents),
-          payment_documents: concat(winner.payment_documents, loser.payment_documents),
-          comments:         concat(winner.comments,         loser.comments),
-        }
-        // Strip a trailing letter (A/B/C/…) from the surviving file number.
-        // Apply to whichever value the user chose to keep (or default winner).
-        const chosenFileNumber = scalarUpdates.file_number ?? winner.file_number ?? ''
-        const stripped = String(chosenFileNumber).replace(/[A-Za-z]$/, '')
-        extraScalarUpdates = {
-          file_number: stripped || chosenFileNumber || null,
-          // Clear legacy single-asset fields now that the data lives in
-          // land_assets_json (so the UI shows the multi-asset table).
-          affected_area_perm: null,
-          affected_area_temp: null,
-          rate_perm:          null,
-          rate_temp:          null,
-          land_use:           null,
-          total_compensation: null,
-        }
-      } else {
-        arrayUpdates = {
-          land_assets_json: concat(winner.land_assets_json, loser.land_assets_json),
-          other_assets_json: concat(winner.other_assets_json, loser.other_assets_json),
-          other_documents:  concat(winner.other_documents,  loser.other_documents),
-          payment_documents: concat(winner.payment_documents, loser.payment_documents),
-          comments:         concat(winner.comments,         loser.comments),
-        }
-      }
-
-      // 1. Update winner with chosen scalar fields + concatenated arrays
+      // 1. Update winner with auto-resolved scalar fields + concatenated arrays
       const { error: updateErr } = await supabase
         .from('households')
         .update({
-          ...scalarUpdates,
           ...extraScalarUpdates,
           ...arrayUpdates,
           last_edited_by: user?.id,
@@ -3890,50 +3830,214 @@ function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
   )
 }
 
-// Merge PAPs Modal — approver tool, field-by-field
-// Fields that are NOT picked one-or-other when merging A/B/C-suffixed PAPs —
-// they get combined into the multi-asset land_assets_json instead.
-const ASSET_FIELDS_HIDDEN_IN_COMBINE = new Set([
-  'land_use',
-  'gps_coordinates',
-  'latitude',
-  'longitude',
-  'total_compensation',
-  'disturbance_allowance',
-])
-const MERGE_FIELDS = [
-  { key: 'file_number', label: 'File Number' },
+// Merge PAPs Modal — approver tool
+//
+// "PAP Information" = identifying details about the person. These use a
+// winner-first / backfill-from-loser rule so nothing is lost when one PAP
+// has a value the other is missing.
+const PAP_INFO_FIELDS = [
   { key: 'household_head_first_name', label: 'First Name' },
-  { key: 'household_head_surname', label: 'Surname' },
-  { key: 'gender', label: 'Gender' },
-  { key: 'id_number', label: 'ID Number' },
-  { key: 'cellphone_no', label: 'Phone' },
-  { key: 'occupation_of_pap', label: 'Occupation' },
-  { key: 'community_council', label: 'Community Council' },
-  { key: 'original_village', label: 'Original Village' },
-  { key: 'current_village', label: 'Current Village' },
-  { key: 'route_name', label: 'Route' },
-  { key: 'route_type', label: 'Route Type' },
-  { key: 'route_code', label: 'Route Code' },
-  { key: 'land_use', label: 'Land Use' },
-  { key: 'gps_coordinates', label: 'GPS' },
-  { key: 'latitude', label: 'Latitude' },
-  { key: 'longitude', label: 'Longitude' },
-  { key: 'photograph_of_pap_url', label: 'PAP Photo URL' },
-  { key: 'id_document_url', label: 'ID Document URL' },
-  { key: 'asset_photo_url', label: 'Asset Photo URL' },
-  { key: 'map_url', label: 'Map URL' },
-  { key: 'verification_status', label: 'Verification Status' },
-  { key: 'approval_status', label: 'Approval Status' },
-  { key: 'admin_notes', label: 'Admin Notes' },
-  { key: 'disturbance_allowance', label: 'Disturbance Allowance (M)' },
-  { key: 'total_compensation', label: 'Total Compensation (M)' },
-  { key: 'caf_document', label: 'CAF Document', type: 'object' },
-  { key: 'payment_status', label: 'Payment Status' },
-  { key: 'paid_amount', label: 'Paid Amount (M)' },
-  { key: 'paid_at', label: 'Paid At' },
-  { key: 'payment_reference', label: 'Payment Reference' },
+  { key: 'household_head_surname',    label: 'Surname' },
+  { key: 'gender',                    label: 'Gender' },
+  { key: 'id_number',                 label: 'ID Number' },
+  { key: 'cellphone_no',              label: 'Phone' },
+  { key: 'file_number',               label: 'File Number' },
+  { key: 'occupation_of_pap',         label: 'Occupation' },
+  { key: 'community_council',         label: 'Community Council' },
+  { key: 'original_village',          label: 'Original Village' },
+  { key: 'current_village',           label: 'Current Village' },
 ]
+
+// Treat blank-ish values as "missing" so backfill works for empty strings too.
+const isMissing = (v) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
+
+// Resolve a PAP-Information field winner-first, falling back to loser when
+// the winner's value is missing. Returns { value, source, conflict } where
+// source is 'kept' (winner had it) or 'other' (backfilled from loser);
+// conflict=true when both have non-empty values that differ.
+function resolvePapInfoField(winnerVal, loserVal) {
+  if (!isMissing(winnerVal)) {
+    const conflict = !isMissing(loserVal) && String(loserVal) !== String(winnerVal)
+    return { value: winnerVal, source: 'kept', conflict }
+  }
+  if (!isMissing(loserVal)) {
+    return { value: loserVal, source: 'other', conflict: false }
+  }
+  return { value: null, source: 'none', conflict: false }
+}
+
+// Build a land_assets_json entry from a household's legacy single-asset
+// fields PLUS its GPS, so per-asset location is preserved by combine merges.
+function buildAssetFromHousehold(h) {
+  return {
+    land_use:           h.land_use || 'Res',
+    affected_area_perm: h.affected_area_perm ?? '',
+    affected_area_temp: h.affected_area_temp ?? '',
+    rate_perm:          h.rate_perm ?? '',
+    rate_temp:          h.rate_temp ?? '',
+    latitude:           h.latitude ?? null,
+    longitude:          h.longitude ?? null,
+    gps_coordinates:    h.gps_coordinates ?? null,
+  }
+}
+
+// Expand a side's land assets, fabricating one from the legacy fields if
+// the side has no multi-asset entries yet. Backfills GPS onto entries that
+// don't carry their own so each asset row knows where it lives.
+function expandLandAssets(h) {
+  const existing = Array.isArray(h.land_assets_json) ? h.land_assets_json : []
+  if (existing.length > 0) {
+    return existing.map(a => ({
+      ...a,
+      latitude:        a.latitude        ?? h.latitude        ?? null,
+      longitude:       a.longitude       ?? h.longitude       ?? null,
+      gps_coordinates: a.gps_coordinates ?? h.gps_coordinates ?? null,
+    }))
+  }
+  const legacyHas = !!(h.affected_area_perm || h.affected_area_temp || h.rate_perm || h.rate_temp || h.land_use)
+  return legacyHas ? [buildAssetFromHousehold(h)] : []
+}
+
+const PAYMENT_RANK = { not_paid: 1, partial: 2, paid: 3 }
+const numOr0 = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : parseFloat(v)
+
+// resolveMergeResult — single source of truth for what the merged PAP looks like.
+// Called both by the modal preview and by the actual database update.
+function resolveMergeResult(winner, loser, { combineAssets = false } = {}) {
+  const concat = (a, b) => [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]
+
+  // 1. PAP Information — winner-first, backfill from loser
+  const papInfo = {}
+  const papInfoDiff = []
+  for (const { key, label } of PAP_INFO_FIELDS) {
+    const r = resolvePapInfoField(winner[key], loser[key])
+    papInfo[key] = r.value
+    papInfoDiff.push({ key, label, ...r, winnerVal: winner[key], loserVal: loser[key] })
+  }
+  // File number suffix-strip in combine mode (applied after backfill resolution)
+  if (combineAssets && papInfo.file_number) {
+    const stripped = String(papInfo.file_number).replace(/[A-Za-z]$/, '')
+    if (stripped) papInfo.file_number = stripped
+  }
+
+  // 2. Land valuation + per-asset location
+  let landAssets, legacyClearance = {}
+  if (combineAssets) {
+    landAssets = [...expandLandAssets(winner), ...expandLandAssets(loser)]
+    // Clear the household-level legacy single-asset + location fields — the
+    // data now lives per-asset inside land_assets_json.
+    legacyClearance = {
+      affected_area_perm: null,
+      affected_area_temp: null,
+      rate_perm:          null,
+      rate_temp:          null,
+      land_use:           null,
+      total_compensation: null,
+    }
+  } else {
+    landAssets = concat(winner.land_assets_json, loser.land_assets_json)
+  }
+
+  // 3. Location at the household level — keep winner's (households share a route).
+  //    In combine mode the per-asset lat/lon/gps live inside land_assets_json,
+  //    so the household-level lat/lon/gps becomes a representative pointer
+  //    (we keep the winner's so the existing UI doesn't suddenly blank out).
+  const locationFields = {
+    route_name:      winner.route_name      ?? loser.route_name      ?? null,
+    route_type:      winner.route_type      ?? loser.route_type      ?? null,
+    route_code:      winner.route_code      ?? loser.route_code      ?? null,
+    latitude:        winner.latitude        ?? loser.latitude        ?? null,
+    longitude:       winner.longitude       ?? loser.longitude       ?? null,
+    gps_coordinates: winner.gps_coordinates ?? loser.gps_coordinates ?? null,
+  }
+
+  // 4. CAF — keep winner's if it exists, otherwise loser's
+  const cafChoice = winner.caf_document
+    ? { value: winner.caf_document, source: 'kept' }
+    : loser.caf_document
+      ? { value: loser.caf_document, source: 'other' }
+      : { value: null, source: 'none' }
+
+  // 5. Payment — combine
+  const wStatus = winner.payment_status || 'not_paid'
+  const lStatus = loser.payment_status  || 'not_paid'
+  const combinedStatus = (PAYMENT_RANK[wStatus] || 1) >= (PAYMENT_RANK[lStatus] || 1) ? wStatus : lStatus
+  const combinedPaidAmount = numOr0(winner.paid_amount) + numOr0(loser.paid_amount) || null
+  const combinedPaidAt = (() => {
+    const ds = [winner.paid_at, loser.paid_at].filter(Boolean).map(d => new Date(d).toISOString())
+    return ds.length ? ds.sort().pop() : null
+  })()
+  const combinedPaymentRef = (() => {
+    const w = winner.payment_reference, l = loser.payment_reference
+    if (w && l && w !== l) return `${w} / ${l}`
+    return w || l || null
+  })()
+
+  // 6. Verification + admin notes — keep winner's
+  const carryWinner = {
+    verification_status: winner.verification_status ?? loser.verification_status ?? null,
+    approval_status:     winner.approval_status     ?? loser.approval_status     ?? null,
+    admin_notes:         winner.admin_notes         ?? loser.admin_notes         ?? null,
+    photograph_of_pap_url: winner.photograph_of_pap_url ?? loser.photograph_of_pap_url ?? null,
+    id_document_url:       winner.id_document_url       ?? loser.id_document_url       ?? null,
+    asset_photo_url:       winner.asset_photo_url       ?? loser.asset_photo_url       ?? null,
+    map_url:               winner.map_url               ?? loser.map_url               ?? null,
+    disturbance_allowance: winner.disturbance_allowance ?? loser.disturbance_allowance ?? null,
+  }
+
+  // Compile final scalar updates
+  const scalarUpdates = {
+    ...papInfo,
+    ...locationFields,
+    ...carryWinner,
+    ...legacyClearance,
+    caf_document:       cafChoice.value,
+    payment_status:     combinedStatus,
+    paid_amount:        combinedPaidAmount,
+    paid_at:            combinedPaidAt,
+    payment_reference:  combinedPaymentRef,
+  }
+
+  // Combined arrays
+  const arrayUpdates = {
+    land_assets_json:  landAssets,
+    other_assets_json: concat(winner.other_assets_json, loser.other_assets_json),
+    other_documents:   concat(winner.other_documents,   loser.other_documents),
+    payment_documents: concat(winner.payment_documents, loser.payment_documents),
+    comments:          concat(winner.comments,          loser.comments),
+  }
+
+  return {
+    scalarUpdates,
+    arrayUpdates,
+    diagnostics: {
+      papInfoDiff,
+      cafChoice,
+      paymentSummary: {
+        statusFrom: combinedStatus === wStatus ? 'kept' : 'other',
+        statusValue: combinedStatus,
+        paidAmount: combinedPaidAmount,
+        paidAt: combinedPaidAt,
+        paymentReference: combinedPaymentRef,
+        winnerPaidAmount: numOr0(winner.paid_amount),
+        loserPaidAmount: numOr0(loser.paid_amount),
+        winnerStatus: wStatus,
+        loserStatus: lStatus,
+      },
+      assetSummary: {
+        winnerCount: expandLandAssets(winner).length,
+        loserCount: expandLandAssets(loser).length,
+        combinedCount: landAssets.length,
+      },
+      counts: {
+        other_documents:   { winner: (winner.other_documents   || []).length, loser: (loser.other_documents   || []).length },
+        payment_documents: { winner: (winner.payment_documents || []).length, loser: (loser.payment_documents || []).length },
+        other_assets:      { winner: (winner.other_assets_json || []).length, loser: (loser.other_assets_json || []).length },
+        comments:          { winner: (winner.comments          || []).length, loser: (loser.comments          || []).length },
+      },
+    },
+  }
+}
 
 // Detect the A/B/C-suffixed multi-asset case: file numbers that match
 // when their trailing letter is stripped (e.g. "...3011-031A" vs "...3011-031B").
@@ -3946,13 +4050,37 @@ function isMultiAssetSuffixPair(a, b) {
   return stripTrailing(a) === stripTrailing(b)
 }
 
+// Section wrapper used inside the merge review modal.
+function MergeSection({ title, subtitle, colors, children }) {
+  return (
+    <section style={{ padding: '14px 16px', border: `1px solid ${colors.border}`, borderRadius: '12px', backgroundColor: colors.bgCard }}>
+      <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: colors.textDark }}>{title}</h3>
+      {subtitle && <p style={{ margin: '4px 0 12px 0', fontSize: '12px', color: colors.textMuted, lineHeight: 1.5 }}>{subtitle}</p>}
+      {children}
+    </section>
+  )
+}
+
+// Label/value preview row used inside MergeSection.
+function PreviewRow({ label, value, colors }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: '12px', padding: '6px 10px', backgroundColor: colors.bgLight, borderRadius: '8px' }}>
+      <span style={{ fontSize: '12px', color: colors.textMuted, fontWeight: 600 }}>{label}</span>
+      <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, wordBreak: 'break-word' }}>{value}</span>
+    </div>
+  )
+}
+
 function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, merging, onCancel, onConfirm, colors }) {
   const [search, setSearch] = useState('')
-  const [choices, setChoices] = useState({}) // field → 'winner' | 'loser'
   // Auto-detect A/B/C-suffixed multi-asset merge once a target is picked.
   const suggestCombine = mergeTarget ? isMultiAssetSuffixPair(winner.file_number, mergeTarget.file_number) : false
   const [combineAssets, setCombineAssets] = useState(false)
   useEffect(() => { setCombineAssets(suggestCombine) }, [mergeTarget?.id, suggestCombine])
+
+  // Compute the merge preview live so the user can see exactly what the merged
+  // PAP will look like before clicking Confirm.
+  const preview = mergeTarget ? resolveMergeResult(winner, mergeTarget, { combineAssets }) : null
 
   const candidates = households.filter(h => h.id !== winner.id).filter(h => {
     if (!search) return true
@@ -3961,29 +4089,17 @@ function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, mergi
       .some(v => v?.toLowerCase().includes(s))
   }).slice(0, 50)
 
-  const sameValue = (a, b) => {
-    if (a == null && b == null) return true
-    if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b)
-    return String(a ?? '') === String(b ?? '')
-  }
   const fmt = (v) => {
     if (v == null || v === '') return '—'
     if (typeof v === 'object') return v.name || JSON.stringify(v).slice(0, 50)
     return String(v)
   }
-
-  const buildScalarUpdates = () => {
-    if (!mergeTarget) return {}
-    const updates = {}
-    MERGE_FIELDS.forEach(({ key }) => {
-      const w = winner[key]
-      const l = mergeTarget[key]
-      if (sameValue(w, l)) return
-      const choice = choices[key] || 'winner' // default to keeping the surviving (winner) value
-      updates[key] = choice === 'loser' ? l : w
-    })
-    return updates
+  const fmtCoord = (lat, lon, gps) => {
+    if (lat != null && lon != null) return `${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}`
+    return gps || '—'
   }
+  const fmtMoney = (n) => 'M ' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const STATUS_LABEL = { paid: 'Paid', partial: 'Partial', not_paid: 'Not paid' }
 
   // Step 1 — picking the merge target
   if (!mergeTarget) {
@@ -4020,32 +4136,24 @@ function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, mergi
     )
   }
 
-  // Step 2 — field-by-field comparison
-  const winnerArrCounts = {
-    land_assets_json: (winner.land_assets_json || []).length,
-    other_assets_json: (winner.other_assets_json || []).length,
-    other_documents: (winner.other_documents || []).length,
-    payment_documents: (winner.payment_documents || []).length,
-    comments: (winner.comments || []).length,
-  }
-  const loserArrCounts = {
-    land_assets_json: (mergeTarget.land_assets_json || []).length,
-    other_assets_json: (mergeTarget.other_assets_json || []).length,
-    other_documents: (mergeTarget.other_documents || []).length,
-    payment_documents: (mergeTarget.payment_documents || []).length,
-    comments: (mergeTarget.comments || []).length,
-  }
+  // Step 2 — review the merge (preview is computed live above)
+  const diag = preview.diagnostics
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
       <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '960px', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Choose Values to Keep</h2>
-            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>For each differing field, pick which value the merged PAP should keep. Lists (assets, documents, comments) are always combined.</p>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Review Merge</h2>
+            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>
+              PAP Information is kept from the surviving record and back-filled from the other one only when missing.
+              Everything else (Location, Valuation, Documents, Payment, Comments) is preserved from both PAPs — nothing is dropped.
+            </p>
           </div>
           <button onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
         </div>
+
+        {/* Two-up header summary */}
         <div style={{ padding: '14px 24px', borderBottom: `1px solid ${colors.border}`, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', backgroundColor: colors.bgLight }}>
           <div style={{ padding: '10px 14px', backgroundColor: `${colors.success}10`, borderRadius: '8px' }}>
             <p style={{ fontSize: '11px', color: colors.success, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>Surviving PAP (kept)</p>
@@ -4059,7 +4167,7 @@ function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, mergi
           </div>
         </div>
 
-        {/* Multi-asset combine banner (auto-suggested when file numbers differ only by trailing A/B/C letter) */}
+        {/* Multi-asset combine toggle */}
         <div style={{
           margin: '14px 24px 0 24px',
           padding: '14px 16px',
@@ -4083,65 +4191,151 @@ function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, mergi
               )}
             </p>
             <p style={{ fontSize: '12px', color: colors.textMuted, margin: '4px 0 0 0', lineHeight: 1.5 }}>
-              Treat both PAPs as different assets of the same household. Each PAP's land use, GPS coordinates,
-              latitude/longitude and valuation become a separate row in the surviving PAP's multi-asset table —
-              nothing is discarded. The trailing letter (A/B/C…) is removed from the surviving file number.
-              {!suggestCombine && ' Only check this if the two PAPs really are the same household.'}
+              When on, the two PAPs are treated as different assets of the same household. Each PAP's land use, GPS, latitude/longitude, and valuation become a separate row in the surviving PAP's multi-asset table. The trailing letter (A/B/C…) is removed from the surviving file number. When off, only the surviving PAP's location and valuation are kept.
             </p>
           </label>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px' }}>
-          {MERGE_FIELDS.map(({ key, label }) => {
-            const w = winner[key], l = mergeTarget[key]
-            if (sameValue(w, l)) return null
-            // In multi-asset mode these fields are combined rather than picked.
-            if (combineAssets && ASSET_FIELDS_HIDDEN_IN_COMBINE.has(key)) return null
-            const chosen = choices[key] || 'winner'
-            return (
-              <div key={key} style={{ padding: '12px 0', borderBottom: `1px solid ${colors.border}` }}>
-                <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>{label}</p>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  {[
-                    { side: 'winner', source: w, color: colors.success, recordLabel: 'Kept PAP' },
-                    { side: 'loser', source: l, color: colors.error, recordLabel: 'Other PAP' },
-                  ].map(({ side, source, color, recordLabel }) => {
-                    const isChosen = chosen === side
-                    return (
-                      <button key={side} onClick={() => setChoices(p => ({ ...p, [key]: side }))} style={{
-                        textAlign: 'left', cursor: 'pointer', padding: '10px 14px',
-                        backgroundColor: isChosen ? `${color}15` : colors.bgCard,
-                        border: `2px solid ${isChosen ? color : colors.border}`,
-                        borderRadius: '10px',
-                      }}>
-                        <p style={{ fontSize: '11px', color, fontWeight: 700, textTransform: 'uppercase', margin: '0 0 4px 0' }}>{recordLabel} {isChosen && '✓'}</p>
-                        <p style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, margin: 0, wordBreak: 'break-word' }}>{fmt(source)}</p>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )
-          })}
-          {/* Combined arrays summary */}
-          <div style={{ padding: '12px 0' }}>
-            <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', margin: '0 0 8px 0' }}>Combined Lists (all items kept)</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
-              {[
-                ['Land Assets', 'land_assets_json'],
-                ['Other Assets', 'other_assets_json'],
-                ['Other Documents', 'other_documents'],
-                ['Payment Documents', 'payment_documents'],
-                ['Comments', 'comments'],
-              ].map(([label, k]) => (
-                <div key={k} style={{ padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '10px', backgroundColor: colors.bgLight }}>
-                  <p style={{ fontSize: '11px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase', margin: 0 }}>{label}</p>
-                  <p style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600, margin: '4px 0 0 0' }}>{winnerArrCounts[k]} + {loserArrCounts[k]} = {winnerArrCounts[k] + loserArrCounts[k]}</p>
-                </div>
-              ))}
+
+        {/* Scrollable body — section-by-section preview */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 24px 24px', display: 'grid', gap: '18px' }}>
+
+          {/* === PAP Information === */}
+          <MergeSection title="PAP Information" subtitle="Surviving values kept; missing fields back-filled from the other PAP." colors={colors}>
+            <div style={{ display: 'grid', gap: '8px' }}>
+              {diag.papInfoDiff.map(({ key, label, value, source, conflict, winnerVal, loserVal }) => {
+                const sourceBadge =
+                  source === 'other'
+                    ? { bg: `${colors.warning}20`, fg: colors.warning, label: 'Back-filled from other PAP' }
+                    : source === 'kept'
+                      ? { bg: `${colors.success}15`, fg: colors.success, label: 'From kept PAP' }
+                      : { bg: colors.bgLight, fg: colors.textMuted, label: 'Both blank' }
+                return (
+                  <div key={key} style={{ display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: '12px', alignItems: 'center', padding: '8px 12px', backgroundColor: colors.bgLight, borderRadius: '8px' }}>
+                    <span style={{ fontSize: '12px', color: colors.textMuted, fontWeight: 600 }}>{label}</span>
+                    <span style={{ fontSize: '13px', color: colors.textDark, fontWeight: 600 }}>{fmt(value)}</span>
+                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '999px', backgroundColor: sourceBadge.bg, color: sourceBadge.fg, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>{sourceBadge.label}</span>
+                    {conflict && (
+                      <p style={{ gridColumn: '2 / 4', fontSize: '11px', color: colors.warning, margin: '4px 0 0 0' }}>
+                        Other PAP has a different value: <strong>{fmt(loserVal)}</strong> (kept value: <strong>{fmt(winnerVal)}</strong>)
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+              {combineAssets && (
+                <p style={{ fontSize: '12px', color: colors.textMuted, fontStyle: 'italic', margin: '6px 0 0 0' }}>
+                  Multi-asset mode: a trailing A/B/C letter is being stripped from the kept file number.
+                </p>
+              )}
             </div>
-            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '10px 0 0 0' }}>Beneficiaries, co-owners, banking details, household assets, and edit requests linked to the other PAP will be reassigned to the surviving PAP.</p>
-          </div>
+          </MergeSection>
+
+          {/* === Location === */}
+          <MergeSection title="Location" subtitle={combineAssets
+            ? "Both PAPs' coordinates are kept per asset inside the multi-asset table."
+            : "Surviving PAP's location is kept."}
+            colors={colors}>
+            <div style={{ display: 'grid', gap: '8px' }}>
+              <PreviewRow label="Route" value={preview.scalarUpdates.route_name || '—'} colors={colors} />
+              <PreviewRow label="Route Type / Code" value={`${preview.scalarUpdates.route_type || '—'} · ${preview.scalarUpdates.route_code || '—'}`} colors={colors} />
+              {combineAssets ? (
+                <div style={{ padding: '8px 12px', backgroundColor: colors.bgLight, borderRadius: '8px' }}>
+                  <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 600 }}>Per-asset locations preserved:</p>
+                  <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: colors.textDark }}>
+                    {preview.arrayUpdates.land_assets_json.map((a, i) => (
+                      <li key={i}>Asset {i + 1} — {a.land_use || '—'} @ {fmtCoord(a.latitude, a.longitude, a.gps_coordinates)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <PreviewRow label="GPS (kept PAP)" value={fmtCoord(preview.scalarUpdates.latitude, preview.scalarUpdates.longitude, preview.scalarUpdates.gps_coordinates)} colors={colors} />
+              )}
+            </div>
+          </MergeSection>
+
+          {/* === Valuation === */}
+          <MergeSection title="Valuation" subtitle={combineAssets
+            ? "Each PAP's land use, areas, and rates kept as a separate asset entry."
+            : "Surviving PAP's valuation is kept."}
+            colors={colors}>
+            {combineAssets ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '560px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: colors.bgLight }}>
+                      {['#', 'Land Use', 'Perm × Rate', 'Temp × Rate', 'Location', 'Subtotal'].map(h => (
+                        <th key={h} style={{ padding: '8px 10px', fontSize: '11px', textAlign: 'left', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.4px', borderBottom: `1px solid ${colors.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.arrayUpdates.land_assets_json.map((a, i) => {
+                      const subtotal = (numOrZero(a.affected_area_perm) * numOrZero(a.rate_perm)) + (numOrZero(a.affected_area_temp) * numOrZero(a.rate_temp))
+                      return (
+                        <tr key={i} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                          <td style={{ padding: '8px 10px', fontSize: '12px', color: colors.textMuted }}>{i + 1}</td>
+                          <td style={{ padding: '8px 10px', fontSize: '13px', fontWeight: 600, color: colors.textDark }}>{a.land_use || '—'}</td>
+                          <td style={{ padding: '8px 10px', fontSize: '12px', color: colors.textDark }}>{a.affected_area_perm || 0} × M {a.rate_perm || 0}</td>
+                          <td style={{ padding: '8px 10px', fontSize: '12px', color: colors.textDark }}>{a.affected_area_temp || 0} × M {a.rate_temp || 0}</td>
+                          <td style={{ padding: '8px 10px', fontSize: '12px', color: colors.textMuted, whiteSpace: 'nowrap' }}>{fmtCoord(a.latitude, a.longitude, a.gps_coordinates)}</td>
+                          <td style={{ padding: '8px 10px', fontSize: '13px', fontWeight: 700, color: colors.textDark }}>{fmtMoney(subtotal)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <PreviewRow label="Valuation" value={fmtMoney(winner.total_compensation || 0)} colors={colors} />
+            )}
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '8px 0 0 0' }}>
+              Disturbance allowance: <strong>{fmtMoney(preview.scalarUpdates.disturbance_allowance || 0)}</strong> (from kept PAP)
+            </p>
+          </MergeSection>
+
+          {/* === Documents === */}
+          <MergeSection title="Documents" subtitle="All files from both PAPs are kept." colors={colors}>
+            <div style={{ display: 'grid', gap: '6px' }}>
+              <PreviewRow label="PAP documents" value={`${diag.counts.other_documents.winner + diag.counts.other_documents.loser} kept (${diag.counts.other_documents.winner} from kept + ${diag.counts.other_documents.loser} from other)`} colors={colors} />
+              <PreviewRow label="CAF" value={
+                diag.cafChoice.source === 'kept' ? "Kept PAP's CAF is used"
+                  : diag.cafChoice.source === 'other' ? "Other PAP's CAF is used (kept PAP has none)"
+                  : 'No CAF on either PAP'
+              } colors={colors} />
+            </div>
+          </MergeSection>
+
+          {/* === Payment === */}
+          <MergeSection title="Payment" subtitle="Statuses combined (best status wins); amounts summed; documents and references preserved." colors={colors}>
+            <div style={{ display: 'grid', gap: '6px' }}>
+              <PreviewRow
+                label="Status"
+                value={`${STATUS_LABEL[diag.paymentSummary.statusValue] || diag.paymentSummary.statusValue} (kept: ${STATUS_LABEL[diag.paymentSummary.winnerStatus] || diag.paymentSummary.winnerStatus} · other: ${STATUS_LABEL[diag.paymentSummary.loserStatus] || diag.paymentSummary.loserStatus})`}
+                colors={colors}
+              />
+              <PreviewRow label="Paid amount" value={`${fmtMoney(diag.paymentSummary.paidAmount || 0)} (${fmtMoney(diag.paymentSummary.winnerPaidAmount)} + ${fmtMoney(diag.paymentSummary.loserPaidAmount)})`} colors={colors} />
+              <PreviewRow label="Paid at" value={diag.paymentSummary.paidAt ? new Date(diag.paymentSummary.paidAt).toLocaleDateString() : '—'} colors={colors} />
+              <PreviewRow label="Reference" value={diag.paymentSummary.paymentReference || '—'} colors={colors} />
+              <PreviewRow label="Payment documents" value={`${diag.counts.payment_documents.winner + diag.counts.payment_documents.loser} kept (${diag.counts.payment_documents.winner} from kept + ${diag.counts.payment_documents.loser} from other)`} colors={colors} />
+            </div>
+          </MergeSection>
+
+          {/* === Comments === */}
+          <MergeSection title="Comments & Notes" subtitle="All notes from both PAPs are merged." colors={colors}>
+            <PreviewRow label="Total comments" value={`${diag.counts.comments.winner + diag.counts.comments.loser} kept (${diag.counts.comments.winner} from kept + ${diag.counts.comments.loser} from other)`} colors={colors} />
+          </MergeSection>
+
+          {/* === Other Assets === */}
+          <MergeSection title="Other Affected Assets" subtitle="All entries from both PAPs are kept." colors={colors}>
+            <PreviewRow label="Total" value={`${diag.counts.other_assets.winner + diag.counts.other_assets.loser} kept (${diag.counts.other_assets.winner} from kept + ${diag.counts.other_assets.loser} from other)`} colors={colors} />
+          </MergeSection>
+
+          {/* === Linked records footnote === */}
+          <p style={{ fontSize: '12px', color: colors.textMuted, fontStyle: 'italic', margin: 0 }}>
+            Beneficiaries, co-owners, banking details, household assets and edit requests linked to the other PAP will be reassigned to the surviving PAP.
+          </p>
         </div>
+
         <div style={{ padding: '14px 24px', borderTop: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
           <button onClick={() => setMergeTarget(null)} disabled={merging} style={{ padding: '10px 16px', backgroundColor: colors.bgLight, color: colors.textDark, border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>← Pick a different PAP</button>
           <div style={{ display: 'flex', gap: '10px' }}>
@@ -4150,7 +4344,7 @@ function MergePAPsModal({ winner, households, mergeTarget, setMergeTarget, mergi
               const baseMsg = `Merge "${mergeTarget.household_head_first_name} ${mergeTarget.household_head_surname}" into "${winner.household_head_first_name} ${winner.household_head_surname}"?\n\nThe other PAP will be deleted. This cannot be undone.`
               const extra = combineAssets ? '\n\nAssets will be combined as multi-asset entries and the trailing letter will be stripped from the file number.' : ''
               if (!confirm(baseMsg + extra)) return
-              onConfirm(buildScalarUpdates(), { combineAssets })
+              onConfirm(null, { combineAssets })
             }} disabled={merging} style={{ padding: '10px 18px', backgroundColor: merging ? colors.bgLight : colors.success, color: merging ? colors.textMuted : 'white', border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700, cursor: merging ? 'wait' : 'pointer', boxShadow: merging ? 'none' : `0 2px 8px ${colors.success}55` }}>
               {merging ? 'Merging…' : 'Confirm Merge'}
             </button>
