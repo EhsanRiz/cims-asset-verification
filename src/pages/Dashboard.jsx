@@ -105,6 +105,9 @@ export default function Dashboard() {
   const [showMergeModal, setShowMergeModal] = useState(false)
   const [merging, setMerging] = useState(false)
   const [showRatesModal, setShowRatesModal] = useState(false)
+  // Master list of asset types + rates from valuation_asset_rates, used to
+  // populate the "Other Affected Assets" picker on the Valuation tab.
+  const [assetRateOptions, setAssetRateOptions] = useState([])
 
   // Build dynamic occupation options from existing data
   const occupationOptions = (() => {
@@ -257,7 +260,15 @@ export default function Dashboard() {
       console.log('Total households loaded:', householdData.length)
       
       setHouseholds(householdData)
-      
+
+      // Fetch asset rate master list (used by Other Affected Assets editor)
+      const { data: arData } = await supabase
+        .from('valuation_asset_rates')
+        .select('asset_type, category, unit, rate')
+        .order('category')
+        .order('asset_type')
+      setAssetRateOptions(arData || [])
+
       const routeMap = new Map()
       householdData?.forEach(h => {
         const routeName = h.route_name
@@ -412,7 +423,7 @@ export default function Dashboard() {
         'asset_photo_url', 'map_url', 'verification_status',
         'route_name', 'route_type', 'land_use', 'gps_coordinates', 'latitude', 'longitude',
         'affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp',
-        'disturbance_allowance', 'total_compensation', 'land_assets_json'
+        'disturbance_allowance', 'total_compensation', 'land_assets_json', 'other_assets_json'
       ]
       
       editableFields.forEach(field => {
@@ -430,7 +441,17 @@ export default function Dashboard() {
         const num = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : parseFloat(v)
         const assetsSubtotal = landAssets.reduce((sum, a) => sum + num(a.affected_area_perm) * num(a.rate_perm) + num(a.affected_area_temp) * num(a.rate_temp), 0)
         const disturbance = num(editedData.disturbance_allowance)
-        const computedTotal = landAssets.length > 0 ? (assetsSubtotal + disturbance) : (editedData.total_compensation || null)
+        // For single-asset (legacy) PAPs, derive total from the underlying
+        // inputs rather than trusting a stale editedData.total_compensation.
+        // Rates are locked in the UI so user-typed area changes will reliably
+        // produce the right total.
+        const legacySingleTotal =
+          num(editedData.affected_area_perm) * num(editedData.rate_perm) +
+          num(editedData.affected_area_temp) * num(editedData.rate_temp) +
+          disturbance
+        const computedTotal = landAssets.length > 0
+          ? (assetsSubtotal + disturbance)
+          : legacySingleTotal
         const { error } = await supabase
           .from('households')
           .update({
@@ -462,6 +483,7 @@ export default function Dashboard() {
             disturbance_allowance: editedData.disturbance_allowance || null,
             total_compensation: computedTotal,
             land_assets_json: landAssets,
+            other_assets_json: editedData.other_assets_json ?? null,
             last_edited_by: user?.id,
             last_edited_by_name: user?.full_name,
             last_edited_at: new Date().toISOString(),
@@ -1544,7 +1566,7 @@ export default function Dashboard() {
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{ROLE_LABELS[(user?.role || '').toLowerCase()] || user?.role}{canApprove ? ' • Can Approve' : isViewOnly ? ' • View Only' : ''}</span>
             </div>
-            {isAdmin && (
+            {canApprove && (
               <button onClick={() => setShowRatesModal(true)}
                 title="Manage valuation rates"
                 style={{ padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
@@ -2009,6 +2031,7 @@ export default function Dashboard() {
               }}
               onPrint={handlePrint}
               onMovePAP={handleMovePAP}
+              assetRateOptions={assetRateOptions}
               user={user}
               colors={colors}
             />
@@ -2091,7 +2114,7 @@ export default function Dashboard() {
       )}
 
       {/* Rates Master Modal */}
-      {showRatesModal && isAdmin && (
+      {showRatesModal && canApprove && (
         <RatesMasterModal
           user={user}
           onClose={() => setShowRatesModal(false)}
@@ -2353,7 +2376,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, canApprove = false, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, canApprove = false, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, assetRateOptions = [], user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2644,11 +2667,15 @@ function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, 
             <LandAssetsValuation data={data} editMode={editMode} isAdmin={isAdmin} onFieldChange={onFieldChange} colors={colors} />
           </Card>
 
-          {data.other_assets_json && (
-            <Card title="Other Affected Assets" icon={TreePine} color={colors.rural} colors={colors}>
-              <OtherAssets assets={data.other_assets_json} colors={colors} />
-            </Card>
-          )}
+          <Card title="Other Affected Assets" icon={TreePine} color={colors.rural} colors={colors}>
+            <OtherAssets
+              assets={data.other_assets_json}
+              editMode={editMode && canEdit}
+              onChange={(next) => onFieldChange('other_assets_json', next)}
+              assetRateOptions={assetRateOptions}
+              colors={colors}
+            />
+          </Card>
         </div>
       )}
 
@@ -2847,15 +2874,20 @@ function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors })
                       <span style={{ fontSize: '13px', fontWeight: 600, color: colors.textDark }}>{a.land_use || '-'}</span>
                     )}
                   </td>
-                  {['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp'].map(field => (
-                    <td key={field} style={{ padding: '10px 12px' }}>
-                      {editMode ? (
-                        <input type="number" inputMode="decimal" value={a[field] ?? ''} onChange={(e) => updateAsset(idx, { [field]: e.target.value })} style={{ width: '110px', padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px' }} />
-                      ) : (
-                        <span style={{ fontSize: '13px', color: colors.textDark }}>{a[field] || '-'}</span>
-                      )}
-                    </td>
-                  ))}
+                  {['affected_area_perm', 'affected_area_temp', 'rate_perm', 'rate_temp'].map(field => {
+                    const isRate = field === 'rate_perm' || field === 'rate_temp'
+                    return (
+                      <td key={field} style={{ padding: '10px 12px' }}>
+                        {editMode && !isRate ? (
+                          <input type="number" inputMode="decimal" value={a[field] ?? ''} onChange={(e) => updateAsset(idx, { [field]: e.target.value })} style={{ width: '110px', padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px' }} />
+                        ) : (
+                          <span style={{ fontSize: '13px', color: isRate && editMode ? colors.textMuted : colors.textDark, fontStyle: isRate && editMode ? 'italic' : 'normal' }} title={isRate && editMode ? 'Rate is set in the Rates table' : undefined}>
+                            {a[field] || '-'}{isRate && editMode ? ' 🔒' : ''}
+                          </span>
+                        )}
+                      </td>
+                    )
+                  })}
                   <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 600, color: colors.textDark }}>{formatM(assetSubtotal(a))}</td>
                   {editMode && (
                     <td style={{ padding: '10px 12px', textAlign: 'right' }}>
@@ -2895,16 +2927,23 @@ function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors })
   }
 
   // Legacy single-asset rendering (preserved for existing PAPs)
+  // Total auto-computed from areas × rates + disturbance so users (or surveyors)
+  // can't accidentally desync the figure from its inputs.
+  const legacyTotal = (
+    numOrZero(data.affected_area_perm) * numOrZero(data.rate_perm) +
+    numOrZero(data.affected_area_temp) * numOrZero(data.rate_temp) +
+    numOrZero(data.disturbance_allowance)
+  )
   return (
     <div style={{ display: 'grid', gap: '16px' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
         <Field label="Land Use" value={data.land_use} field="land_use" editMode={editMode} onChange={onFieldChange} colors={colors} options={LAND_USE_OPTIONS} />
         <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
         <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
-        <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
-        <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
+        <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} colors={colors} locked hint="Set in the Rates table" />
+        <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} colors={colors} locked hint="Set in the Rates table" />
         <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
-        <Field label="Total Compensation (M)" value={data.total_compensation} field="total_compensation" editMode={editMode} onChange={onFieldChange} highlight colors={colors} />
+        <Field label="Total Compensation (M)" value={legacyTotal} field="total_compensation" editMode={editMode} highlight colors={colors} locked hint="Auto-calculated: perm area × perm rate + temp area × temp rate + disturbance" />
       </div>
       {editMode && isAdmin && (
         <button onClick={legacyHasValues ? convertLegacyToMulti : addAsset} style={{ alignSelf: 'flex-start', padding: '8px 14px', backgroundColor: `${colors.accent}15`, color: colors.accent, border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2940,13 +2979,19 @@ function Card({ title, icon: Icon, color, colors, children }) {
 }
 
 // Field component
-function Field({ label, value, field, editMode, onChange, highlight, colors, options }) {
+function Field({ label, value, field, editMode, onChange, highlight, colors, options, locked, hint }) {
   const displayValue = value !== null && value !== undefined ? String(value) : ''
-  
+  const editable = editMode && onChange && !locked
+
   return (
     <div>
-      <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500' }}>{label}</p>
-      {editMode && onChange ? (
+      <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>{label}</span>
+        {locked && editMode && (
+          <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', backgroundColor: colors.bgLight, color: colors.textMuted, border: `1px solid ${colors.border}`, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Locked</span>
+        )}
+      </p>
+      {editable ? (
         options ? (
           <select value={displayValue} onChange={(e) => onChange(field, e.target.value)}
             style={{ width: '100%', padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10`, transition: 'all 0.2s', cursor: 'pointer' }}>
@@ -2958,44 +3003,196 @@ function Field({ label, value, field, editMode, onChange, highlight, colors, opt
             })}
           </select>
         ) : (
-          <input type="text" value={displayValue} onChange={(e) => onChange(field, e.target.value)} 
+          <input type="text" value={displayValue} onChange={(e) => onChange(field, e.target.value)}
             style={{ width: '100%', padding: '10px 14px', border: `2px solid ${colors.accent}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box', backgroundColor: `${colors.accent}10`, transition: 'all 0.2s' }} />
         )
       ) : (
-        <p style={{ fontSize: '14px', fontWeight: highlight ? '700' : '600', color: displayValue ? (highlight ? colors.accent : colors.textDark) : colors.textLight, margin: 0 }}>
-          {displayValue || 'N/A'}
-        </p>
+        <>
+          <p style={{
+            fontSize: '14px',
+            fontWeight: highlight ? '700' : '600',
+            color: displayValue ? (highlight ? colors.accent : colors.textDark) : colors.textLight,
+            margin: 0,
+            padding: locked && editMode ? '10px 14px' : 0,
+            borderRadius: locked && editMode ? '8px' : 0,
+            backgroundColor: locked && editMode ? colors.bgLight : 'transparent',
+            border: locked && editMode ? `1px dashed ${colors.border}` : 'none'
+          }}>
+            {displayValue || 'N/A'}
+          </p>
+          {hint && editMode && (
+            <p style={{ fontSize: '11px', color: colors.textMuted, margin: '4px 0 0 0', fontStyle: 'italic' }}>{hint}</p>
+          )}
+        </>
       )}
     </div>
   )
 }
 
 // Other Assets display
-function OtherAssets({ assets, colors }) {
+function OtherAssets({ assets, editMode, onChange, assetRateOptions = [], colors }) {
   let parsed = []
   try {
-    parsed = typeof assets === 'string' ? JSON.parse(assets) : assets
+    parsed = typeof assets === 'string' ? JSON.parse(assets) : (assets || [])
   } catch (e) {
-    return <p style={{ color: colors.textMuted, fontSize: '14px' }}>No other assets</p>
+    parsed = []
   }
-  
-  if (!parsed || parsed.length === 0) {
-    return <p style={{ color: colors.textMuted, fontSize: '14px' }}>No other assets recorded</p>
+  if (!Array.isArray(parsed)) parsed = []
+
+  const num = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : parseFloat(v)
+  const computeValue = (qty, rate) => num(qty) * num(rate)
+
+  // Group asset rate options by category for a cleaner dropdown.
+  const groupedOptions = (() => {
+    const groups = new Map()
+    for (const r of assetRateOptions) {
+      const cat = r.category || 'Other'
+      if (!groups.has(cat)) groups.set(cat, [])
+      groups.get(cat).push(r)
+    }
+    return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  })()
+
+  const findRateForType = (assetType) => {
+    if (!assetType) return null
+    return assetRateOptions.find(r => r.asset_type === assetType) || null
   }
-  
+
+  const updateRow = (idx, patch) => {
+    const next = parsed.map((row, i) => {
+      if (i !== idx) return row
+      const merged = { ...row, ...patch }
+      // If type changed, look up the canonical rate (and unit) from the master list.
+      if ('type' in patch) {
+        const meta = findRateForType(patch.type)
+        if (meta) {
+          merged.rate = meta.rate ?? merged.rate ?? ''
+          merged.unit = meta.unit ?? merged.unit ?? ''
+        }
+      }
+      // Always keep value in sync with qty × rate so it can't drift.
+      merged.value = computeValue(merged.quantity, merged.rate)
+      return merged
+    })
+    onChange?.(next)
+  }
+
+  const addRow = () => {
+    onChange?.([
+      ...parsed,
+      { type: '', quantity: '', rate: '', unit: '', value: 0 }
+    ])
+  }
+
+  const removeRow = (idx) => {
+    if (!confirm('Remove this asset?')) return
+    onChange?.(parsed.filter((_, i) => i !== idx))
+  }
+
+  if (!editMode) {
+    if (parsed.length === 0) {
+      return <p style={{ color: colors.textMuted, fontSize: '14px', margin: 0 }}>No other assets recorded</p>
+    }
+    return (
+      <div style={{ display: 'grid', gap: '10px' }}>
+        {parsed.map((asset, idx) => (
+          <div key={idx} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', fontSize: '14px', gap: '12px', flexWrap: 'wrap'
+          }}>
+            <span style={{ fontWeight: '600', color: colors.textDark }}>{asset.type || '—'}</span>
+            <span style={{ color: colors.textMuted, fontSize: '13px' }}>
+              Qty: {asset.quantity || 0}{asset.unit ? ` ${asset.unit}` : ''} · Rate: M {asset.rate || 0} ·
+              {' '}Value: <span style={{ fontWeight: '600', color: colors.accent }}>M {Number(asset.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  // Edit mode
   return (
-    <div style={{ display: 'grid', gap: '10px' }}>
-      {parsed.map((asset, idx) => (
-        <div key={idx} style={{ 
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', fontSize: '14px' 
-        }}>
-          <span style={{ fontWeight: '600', color: colors.textDark }}>{asset.type}</span>
-          <span style={{ color: colors.textMuted }}>
-            Qty: {asset.quantity} | Rate: M{asset.rate} | Value: <span style={{ fontWeight: '600', color: colors.accent }}>M{asset.value}</span>
-          </span>
-        </div>
-      ))}
+    <div style={{ display: 'grid', gap: '12px' }}>
+      {parsed.length === 0 && (
+        <p style={{ color: colors.textMuted, fontSize: '13px', margin: 0, fontStyle: 'italic' }}>
+          No other assets yet. Click "Add asset" below.
+        </p>
+      )}
+
+      {parsed.map((row, idx) => {
+        const meta = findRateForType(row.type)
+        const unit = row.unit || meta?.unit || ''
+        return (
+          <div key={idx} style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(180px, 2fr) minmax(110px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) auto',
+            gap: '10px', alignItems: 'end',
+            padding: '12px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}`
+          }}>
+            <div>
+              <p style={{ fontSize: '11px', color: colors.textMuted, margin: '0 0 4px 0', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Asset Type</p>
+              <select
+                value={row.type || ''}
+                onChange={(e) => updateRow(idx, { type: e.target.value })}
+                style={{ width: '100%', padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', backgroundColor: colors.bgCard, boxSizing: 'border-box' }}
+              >
+                <option value="">— Select —</option>
+                {groupedOptions.map(([category, options]) => (
+                  <optgroup key={category} label={category}>
+                    {options.map(o => (
+                      <option key={o.asset_type} value={o.asset_type}>{o.asset_type}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <p style={{ fontSize: '11px', color: colors.textMuted, margin: '0 0 4px 0', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                Quantity{unit ? ` (${unit})` : ''}
+              </p>
+              <input
+                type="number" inputMode="decimal" value={row.quantity ?? ''}
+                onChange={(e) => updateRow(idx, { quantity: e.target.value })}
+                placeholder="0"
+                style={{ width: '100%', padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div>
+              <p style={{ fontSize: '11px', color: colors.textMuted, margin: '0 0 4px 0', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Rate (M) 🔒</p>
+              <div style={{ padding: '8px 10px', borderRadius: '6px', border: `1px dashed ${colors.border}`, backgroundColor: colors.bgCard, fontSize: '13px', color: colors.textMuted, fontStyle: 'italic' }} title="Set in the Rates table">
+                {row.rate !== '' && row.rate != null ? `M ${row.rate}` : '—'}
+              </div>
+            </div>
+
+            <div>
+              <p style={{ fontSize: '11px', color: colors.textMuted, margin: '0 0 4px 0', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Value</p>
+              <div style={{ padding: '8px 10px', borderRadius: '6px', border: `1px dashed ${colors.border}`, backgroundColor: colors.bgCard, fontSize: '13px', fontWeight: 700, color: colors.accent }}>
+                M {Number(row.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            <button
+              onClick={() => removeRow(idx)}
+              title="Remove this asset"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: '8px', alignSelf: 'end' }}
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        )
+      })}
+
+      <button onClick={addRow} style={{
+        alignSelf: 'flex-start', padding: '8px 14px',
+        backgroundColor: `${colors.accent}15`, color: colors.accent,
+        border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer',
+        fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px'
+      }}>
+        <Plus size={14} /> Add asset
+      </button>
     </div>
   )
 }
