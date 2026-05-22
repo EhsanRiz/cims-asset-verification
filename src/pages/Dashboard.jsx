@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../App'
 import { supabase, ROLE_LABELS, apiFetch, logAudit } from '../lib/supabase'
 import StaffManagement from '../components/StaffManagement'
+import HistoryTab from '../components/HistoryTab'
 import { 
   LogOut, Search, Users, Home, ChevronRight, ChevronLeft,
   CreditCard, FileText, User, Printer, Edit2, 
@@ -301,7 +302,7 @@ export default function Dashboard() {
     total: households.length,
     routes: routes.length,
     verified: households.filter(h => h.verification_status?.toLowerCase() === 'verified' || h.approval_status === 'approved').length,
-    paid: households.filter(h => h.payment_status === 'paid').length
+    paid: households.filter(h => h.payment_status === 'paid' || (h.payment_documents?.length ?? 0) > 0).length
   }
 
   // Progress calculation
@@ -337,7 +338,7 @@ export default function Dashboard() {
     : listFilter === 'all'
       ? households.filter(matchesSearch).sort(sortByFileNumber)
       : listFilter === 'paid'
-        ? households.filter(h => h.payment_status === 'paid' && matchesSearch(h)).sort(sortByFileNumber)
+        ? households.filter(h => (h.payment_status === 'paid' || (h.payment_documents?.length ?? 0) > 0) && matchesSearch(h)).sort(sortByFileNumber)
         : []
 
   const handleSelectRoute = (route) => {
@@ -1978,6 +1979,7 @@ export default function Dashboard() {
               editMode={editMode}
               isAdmin={isAdmin}
               canEdit={canEdit}
+              canApprove={canApprove}
               isViewOnly={isViewOnly}
               saving={saving}
               activeTab={activeTab}
@@ -2351,7 +2353,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, canApprove = false, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2628,6 +2630,11 @@ function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, 
             colors={colors}
             onRefresh={onRefresh}
           />
+
+          {/* Change History (audit log) */}
+          <Card title="Change History" icon={Clock} color={colors.urban} colors={colors}>
+            <HistoryTab household={household} colors={colors} />
+          </Card>
         </div>
       )}
 
@@ -2659,7 +2666,7 @@ function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, 
       {activeTab === 'payments' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Payment Status" icon={CreditCard} color={colors.warning} colors={colors}>
-            <PaymentStatusForm household={data} isAdmin={isAdmin} onUpdate={onUpdatePayment} colors={colors} />
+            <PaymentStatusForm household={data} canEdit={canApprove} onUpdate={onUpdatePayment} colors={colors} />
           </Card>
           <Card title="Payment Documents" icon={FileUp} color={colors.primary} colors={colors}>
             <DocumentUploader documents={data.payment_documents || []} onUpload={onPaymentDocUpload} onDelete={onDeletePaymentDoc} onPreview={onPreviewDoc} colors={colors} />
@@ -2667,15 +2674,12 @@ function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, 
         </div>
       )}
 
-      {activeTab === 'history' && (
-        <HistoryTab household={household} colors={colors} />
-      )}
     </div>
   )
 }
 
 // Payment Status Form
-function PaymentStatusForm({ household, isAdmin, onUpdate, colors }) {
+function PaymentStatusForm({ household, canEdit, onUpdate, colors }) {
   const toLocalDate = (iso) => {
     if (!iso) return ''
     const d = new Date(iso)
@@ -2722,7 +2726,7 @@ function PaymentStatusForm({ household, isAdmin, onUpdate, colors }) {
     }
   }
 
-  if (!isAdmin) {
+  if (!canEdit) {
     return (
       <div style={{ display: 'grid', gap: '12px' }}>
         <div style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: '8px', padding: '6px 14px', borderRadius: '999px', backgroundColor: statusBadge.bg, color: statusBadge.fg, fontWeight: 700, fontSize: '13px' }}>
@@ -2733,7 +2737,7 @@ function PaymentStatusForm({ household, isAdmin, onUpdate, colors }) {
           <Field label="Date Paid" value={household.paid_at ? new Date(household.paid_at).toLocaleDateString() : ''} colors={colors} />
           <Field label="Payment Reference" value={household.payment_reference} colors={colors} />
         </div>
-        <p style={{ fontSize: '12px', color: colors.textMuted, margin: 0 }}>Only admins can update payment status.</p>
+        <p style={{ fontSize: '12px', color: colors.textMuted, margin: 0 }}>You do not have permission to update payment status.</p>
       </div>
     )
   }
