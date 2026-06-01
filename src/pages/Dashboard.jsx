@@ -1630,59 +1630,18 @@ export default function Dashboard() {
           {/* ROUTES VIEW */}
           {view === 'routes' && (
             <>
-              {/* Progress Tracker */}
-              <div style={{ 
-                backgroundColor: colors.bgCard, 
-                borderRadius: '16px', 
-                padding: '20px 24px', 
-                marginBottom: '20px',
-                border: `1px solid ${colors.border}`,
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ padding: '8px', backgroundColor: `${colors.accent}15`, borderRadius: '8px' }}>
-                      <TrendingUp size={20} color={colors.accent} />
-                    </div>
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: colors.textDark }}>Verification Progress</h3>
-                      <p style={{ margin: '2px 0 0 0', fontSize: '13px', color: colors.textMuted }}>
-                        {progress.verified} of {progress.total} PAPs verified ({progress.percentage}%)
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {/* Export Button */}
-                  <button onClick={handleExportExcel} style={{ 
-                    display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', 
-                    backgroundColor: colors.primary, color: 'white', 
-                    border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
-                    boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)', transition: 'all 0.2s'
-                  }}
-                  onMouseOver={e => e.currentTarget.style.transform = 'translateY(-1px)'}
-                  onMouseOut={e => e.currentTarget.style.transform = 'none'}>
-                    <Download size={18} /> Export to Excel
-                  </button>
-                </div>
-                
-                {/* Progress Bar */}
-                <div style={{ backgroundColor: colors.bgLight, borderRadius: '10px', height: '12px', overflow: 'hidden' }}>
-                  <div style={{ 
-                    width: `${progress.percentage}%`, 
-                    height: '100%', 
-                    background: `linear-gradient(90deg, ${colors.accent} 0%, ${colors.success} 100%)`,
-                    borderRadius: '10px',
-                    transition: 'width 0.5s ease'
-                  }} />
-                </div>
-                
-                {/* Progress Stats */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginTop: '16px' }}>
-                  <ProgressStat label="Verified" value={progress.verified} total={progress.total} color={colors.success} />
-                  <ProgressStat label="With Photos" value={progress.withPhotos} total={progress.total} color={colors.primary} />
-                  <ProgressStat label="With ID Number" value={progress.withID} total={progress.total} color={colors.warning} />
-                  <ProgressStat label="With File No." value={progress.withFileNo} total={progress.total} color={colors.urban} />
-                </div>
+              {/* Export action (Verification Progress card removed) */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
+                <button onClick={handleExportExcel} style={{
+                  display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px',
+                  backgroundColor: colors.primary, color: 'white',
+                  border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(26, 58, 74, 0.2)', transition: 'all 0.2s'
+                }}
+                onMouseOver={e => e.currentTarget.style.transform = 'translateY(-1px)'}
+                onMouseOut={e => e.currentTarget.style.transform = 'none'}>
+                  <Download size={18} /> Export to Excel
+                </button>
               </div>
 
               {/* Stats Cards */}
