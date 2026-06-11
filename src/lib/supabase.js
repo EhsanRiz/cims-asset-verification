@@ -145,6 +145,57 @@ export async function logAudit({ household_id, action, changed_fields, edited_by
 }
 
 /**
+ * Insert a row into usage_logs — an account-activity event (login, etc.).
+ * Fire-and-forget by design, exactly like logAudit: activity logging must
+ * never block or fail a user action. Errors are logged to the console but
+ * swallowed.
+ *
+ * The display name / email / role are denormalised into `metadata` at write
+ * time (same pattern as pap_audit_log.edited_by_name) so the admin Activity
+ * Log can render without joining system_users — whose RLS only exposes the
+ * caller's own row.
+ *
+ * NOTE: usage_logs RLS requires `user_id = auth.uid()` on INSERT, so the
+ * value passed here must be the Supabase Auth user id (profile.auth_user_id),
+ * NOT the system_users.id.
+ *
+ *   await logUsage({ authUserId, action: 'login', metadata: { name, email, role, via } })
+ */
+export async function logUsage({ authUserId, action, metadata }) {
+  try {
+    if (!authUserId) return  // no auth uid → RLS would reject the insert
+    const { error } = await supabase.from('usage_logs').insert({
+      user_id:  authUserId,
+      action:   action || 'event',
+      metadata: metadata || {},
+    })
+    if (error) console.warn('logUsage insert failed:', error.message)
+  } catch (e) {
+    console.warn('logUsage threw:', e?.message)
+  }
+}
+
+/**
+ * Convenience wrapper: record a successful sign-in. `profile` is the merged
+ * profile returned by loadCurrentUserProfile()/signInWithEmail(). `via`
+ * distinguishes the password form ('password') from email-link auto sign-in
+ * ('email_link').
+ */
+export async function logLogin(profile, via = 'password') {
+  if (!profile) return
+  await logUsage({
+    authUserId: profile.auth_user_id,
+    action:     'login',
+    metadata: {
+      name:  profile.full_name || profile.username || 'Unknown',
+      email: profile.email || profile.auth_email || null,
+      role:  profile.role || null,
+      via,
+    },
+  })
+}
+
+/**
  * Wrapper around fetch() that attaches the current Supabase session's
  * access token as the Authorization: Bearer header. Use this for any
  * call to the CIMS Express server's /api/* endpoints — the server

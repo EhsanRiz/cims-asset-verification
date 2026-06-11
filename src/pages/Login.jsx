@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
-import { signInWithEmail, supabase, loadCurrentUserProfile } from '../lib/supabase'
+import { signInWithEmail, supabase, loadCurrentUserProfile, logLogin } from '../lib/supabase'
 import { LogIn, AlertCircle } from 'lucide-react'
 import AuthShell from '../components/AuthShell'
 
@@ -67,6 +67,7 @@ export default function Login() {
         window.history.replaceState(null, '', '#/login')
         if (cancelled) return
         login(profile)
+        logLogin(profile, 'email_link')  // fire-and-forget activity event
         navigate('/')
       } catch (err) {
         console.error('Auto sign-in from email link failed:', err)
@@ -89,6 +90,7 @@ export default function Login() {
     try {
       const profile = await signInWithEmail(email.trim().toLowerCase(), password)
       login(profile)
+      logLogin(profile, 'password')  // fire-and-forget activity event
       navigate('/')
     } catch (err) {
       setError(err.message || 'Failed to sign in')
