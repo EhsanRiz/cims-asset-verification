@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard'
 import Landing from './pages/Landing'
 import Collect from './pages/Collect'
 import { supabase, loadCurrentUserProfile, signOut as supabaseSignOut, canEdit, VIEW_ONLY_ROLES } from './lib/supabase'
+import { useSessionTracker, endSession } from './lib/session'
 
 // ── Auth Context ───────────────────────────────────────────────────────────────
 const AuthContext = createContext(null)
@@ -16,6 +17,9 @@ export function useAuth() { return useContext(AuthContext) }
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  // Phase 2: keep a session heartbeat alive while a user is signed in.
+  useSessionTracker(user)
 
   // Refresh the merged profile (auth.users + system_users) from Supabase.
   const refresh = async () => {
@@ -69,6 +73,7 @@ function AuthProvider({ children }) {
 
   const login = (profile) => setUser(profile)
   const logout = async () => {
+    await endSession()          // stamp ended_at before the auth session goes away
     await supabaseSignOut()
     setUser(null)
   }

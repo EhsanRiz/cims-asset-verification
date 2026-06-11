@@ -3,10 +3,24 @@ import { supabase, ROLE_LABELS } from '../lib/supabase'
 import {
   Activity, LogIn, Clock, Users, RefreshCw, AlertCircle, Loader2,
   Edit2, Plus, Trash2, FileUp, FileText, CreditCard, ArrowRightLeft, Check, Mail,
+  Timer, Hourglass,
 } from 'lucide-react'
 
 // How many rows to pull per feed. Plenty for a pilot; bump if needed.
 const FEED_LIMIT = 250
+
+// A session whose last heartbeat is within this window (and not ended) is "active now".
+const ACTIVE_WINDOW_MS = 5 * 60 * 1000
+
+function fmtDuration(ms) {
+  if (ms == null || ms < 0) return '—'
+  const totalMin = Math.round(ms / 60000)
+  if (totalMin < 1) return '< 1 min'
+  if (totalMin < 60) return `${totalMin} min`
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return m ? `${h} hr ${m} min` : `${h} hr`
+}
 
 // Mirror of the labels used in HistoryTab so the change feed reads consistently.
 const ACTION_META = {
@@ -49,9 +63,10 @@ function fmtRelative(iso) {
 
 export default function AdminActivityTab({ colors }) {
   const [subTab, setSubTab]   = useState('signins')   // 'signins' | 'changes'
-  const [logins, setLogins]   = useState([])
-  const [changes, setChanges] = useState([])
-  const [papMap, setPapMap]   = useState({})          // household_id -> { file_number, name }
+  const [logins, setLogins]     = useState([])
+  const [changes, setChanges]   = useState([])
+  const [sessions, setSessions] = useState([])
+  const [papMap, setPapMap]     = useState({})        // household_id -> { file_number, name }
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState('')
 
@@ -74,13 +89,25 @@ export default function AdminActivityTab({ colors }) {
         .order('edited_at', { ascending: false })
         .limit(FEED_LIMIT)
 
-      const [{ data: loginRows, error: lErr }, { data: changeRows, error: cErr }] =
-        await Promise.all([loginsQ, changesQ])
+      // Sessions, newest activity first (admin reads via user_sessions_admin_select).
+      const sessionsQ = supabase
+        .from('user_sessions')
+        .select('id, auth_user_id, user_name, user_email, user_role, started_at, last_seen_at, ended_at')
+        .order('last_seen_at', { ascending: false })
+        .limit(FEED_LIMIT)
+
+      const [
+        { data: loginRows, error: lErr },
+        { data: changeRows, error: cErr },
+        { data: sessionRows, error: sErr },
+      ] = await Promise.all([loginsQ, changesQ, sessionsQ])
       if (lErr) throw lErr
       if (cErr) throw cErr
+      if (sErr) throw sErr
 
       setLogins(loginRows || [])
       setChanges(changeRows || [])
+      setSessions(sessionRows || [])
 
       // Resolve PAP references for the change feed in one round-trip.
       const ids = [...new Set((changeRows || []).map(r => r.household_id).filter(Boolean))]
@@ -122,6 +149,11 @@ export default function AdminActivityTab({ colors }) {
   const since30 = Date.now() - 30 * 24 * 3600 * 1000
   const logins30 = logins.filter(r => new Date(r.created_at).getTime() >= since30).length
 
+  const isActive = (s) => !s.ended_at && (Date.now() - new Date(s.last_seen_at).getTime()) < ACTIVE_WINDOW_MS
+  const activeNow = sessions.filter(isActive).length
+  const durations = sessions.map(s => new Date(s.ended_at || s.last_seen_at).getTime() - new Date(s.started_at).getTime()).filter(d => d >= 0)
+  const avgDuration = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null
+
   return (
     <div style={{ display: 'grid', gap: '20px' }}>
       {/* Header */}
@@ -154,9 +186,10 @@ export default function AdminActivityTab({ colors }) {
 
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-        <SummaryCard icon={LogIn}  color={colors.primary} label="Sign-ins (30 days)" value={logins30} colors={colors} />
-        <SummaryCard icon={Users}  color="#7c3aed"        label="Distinct people seen" value={lastSeen.length} colors={colors} />
-        <SummaryCard icon={Edit2}  color="#0088c4"        label="Recent changes loaded" value={changes.length} colors={colors} />
+        <SummaryCard icon={LogIn}     color={colors.primary} label="Sign-ins (30 days)" value={logins30} colors={colors} />
+        <SummaryCard icon={Activity}  color="#16a34a"        label="Active now" value={activeNow} colors={colors} />
+        <SummaryCard icon={Hourglass} color="#d97706"        label="Avg session" value={fmtDuration(avgDuration)} colors={colors} />
+        <SummaryCard icon={Edit2}     color="#0088c4"        label="Recent changes" value={changes.length} colors={colors} />
       </div>
 
       {error && (
@@ -167,7 +200,7 @@ export default function AdminActivityTab({ colors }) {
 
       {/* Sub-tabs */}
       <div style={{ display: 'flex', gap: '8px', borderBottom: `1px solid ${colors.border}`, paddingBottom: '0' }}>
-        {[['signins', 'Sign-ins', LogIn], ['changes', 'Changes', Edit2]].map(([id, label, Icon]) => (
+        {[['signins', 'Sign-ins', LogIn], ['sessions', 'Sessions', Timer], ['changes', 'Changes', Edit2]].map(([id, label, Icon]) => (
           <button key={id} onClick={() => setSubTab(id)}
             style={{
               display: 'flex', alignItems: 'center', gap: '7px',
@@ -187,6 +220,8 @@ export default function AdminActivityTab({ colors }) {
         </div>
       ) : subTab === 'signins' ? (
         <SignInsView logins={logins} lastSeen={lastSeen} colors={colors} />
+      ) : subTab === 'sessions' ? (
+        <SessionsView sessions={sessions} isActive={isActive} colors={colors} />
       ) : (
         <ChangesView changes={changes} papMap={papMap} colors={colors} />
       )}
@@ -273,6 +308,55 @@ function SignInsView({ logins, lastSeen, colors }) {
         </div>
       </Panel>
     </div>
+  )
+}
+
+function SessionsView({ sessions, isActive, colors }) {
+  if (sessions.length === 0) {
+    return <Empty colors={colors} text="No sessions recorded yet. Each sign-in starts a session; duration is tracked while the tab is open." />
+  }
+  return (
+    <Panel
+      title="Recent sessions"
+      subtitle={`${sessions.length} most recent · duration is an estimate of active time`}
+      icon={Timer}
+      colors={colors}
+    >
+      <div style={{ display: 'grid', gap: '8px' }}>
+        {sessions.map(s => {
+          const active = isActive(s)
+          const endMs = new Date(s.ended_at || s.last_seen_at).getTime()
+          const duration = endMs - new Date(s.started_at).getTime()
+          return (
+            <div key={s.id} style={rowStyle(colors)}>
+              <Avatar name={s.user_name} colors={colors} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontWeight: 600, color: colors.textDark, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {s.user_name || 'Unknown'}
+                  {s.user_role && (
+                    <span style={{ fontWeight: 500, color: colors.textMuted, fontSize: '12px' }}>
+                      {ROLE_LABELS[(s.user_role || '').toLowerCase()] || s.user_role}
+                    </span>
+                  )}
+                  {active && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 600, color: '#16a34a', backgroundColor: '#16a34a18', padding: '2px 8px', borderRadius: '999px' }}>
+                      <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#16a34a', display: 'inline-block' }} /> Active now
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '12px', color: colors.textMuted }}>
+                  Started {fmtDateTime(s.started_at)} · {active ? 'last seen' : s.ended_at ? 'signed out' : 'last seen'} {fmtRelative(s.ended_at || s.last_seen_at)}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: colors.textDark }}>{fmtDuration(duration)}</div>
+                <div style={{ fontSize: '11px', color: colors.textMuted }}>{active ? 'so far' : 'duration'}</div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Panel>
   )
 }
 
