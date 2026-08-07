@@ -81,13 +81,16 @@ export default function Dashboard() {
   //   admin                                    → full access
   //   user (Mamokuena)                          → editor (legacy approver)
   //   clo, arco, rco, essm                      → editor (can add/edit PAPs)
-  //   assistant_clo, pm, ict_dmo, client        → view-only
+  //   assistant_clo                             → editor (edits go through approval)
+  //   pm, ict_dmo, client                       → view-only
   const _role = (user?.role || '').toLowerCase()
   const isAdmin = _role === 'admin'
   const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
-  const isViewOnly = ['assistant_clo', 'pm', 'ict_dmo', 'client'].includes(_role)
-  const canEdit = !isViewOnly  // admin, user, clo, arco, rco, essm all get edit rights
+  const isViewOnly = ['pm', 'ict_dmo', 'client'].includes(_role)
+  const canEdit = !isViewOnly  // admin, user, clo, arco, rco, essm, assistant_clo all get edit rights
   const canApprove = isAdmin || isMamokuena || ['clo', 'arco', 'rco', 'essm'].includes(_role)
+  // Route proposals need sign-off from an RCO (or admin) — see routes workflow.
+  const isRouteApprover = isAdmin || _role === 'rco'
 
   // Notifications state
   const [notifications, setNotifications] = useState([])
@@ -109,6 +112,11 @@ export default function Dashboard() {
   // Master list of asset types + rates from valuation_asset_rates, used to
   // populate the "Other Affected Assets" picker on the Valuation tab.
   const [assetRateOptions, setAssetRateOptions] = useState([])
+  // Master land rates from valuation_land_rates, used to auto-fill
+  // rate_perm/rate_temp when a land asset row is added or its land use changes.
+  const [landRateOptions, setLandRateOptions] = useState([])
+  // Add-route modal state (route proposals need RCO/admin approval).
+  const [showAddRoute, setShowAddRoute] = useState(false)
 
   // Build dynamic occupation options from existing data
   const occupationOptions = (() => {
@@ -270,6 +278,12 @@ export default function Dashboard() {
         .order('asset_type')
       setAssetRateOptions(arData || [])
 
+      // Land rate master list (used to auto-fill rates on land asset rows)
+      const { data: lrData } = await supabase
+        .from('valuation_land_rates')
+        .select('land_use, route_type, rate_perm, rate_temp')
+      setLandRateOptions(lrData || [])
+
       const routeMap = new Map()
       householdData?.forEach(h => {
         const routeName = h.route_name
@@ -284,7 +298,29 @@ export default function Dashboard() {
           routeMap.get(routeName).pap_count++
         }
       })
-      
+
+      // Overlay the routes table: carries approval status + who-added trail,
+      // and surfaces newly added routes that don't have any PAPs yet.
+      const { data: routeRows } = await supabase.from('routes').select('*')
+      ;(routeRows || []).forEach(r => {
+        if (r.status === 'rejected') return
+        const existing = routeMap.get(r.route_name)
+        if (existing) {
+          Object.assign(existing, { id: r.id, status: r.status, created_by: r.created_by, created_by_name: r.created_by_name, created_at: r.created_at })
+        } else {
+          routeMap.set(r.route_name, {
+            name: r.route_name,
+            type: r.route_type || 'Unknown',
+            pap_count: 0,
+            id: r.id,
+            status: r.status,
+            created_by: r.created_by,
+            created_by_name: r.created_by_name,
+            created_at: r.created_at,
+          })
+        }
+      })
+
       const sortedRoutes = Array.from(routeMap.values()).sort((a, b) => a.name.localeCompare(b.name))
       setRoutes(sortedRoutes)
       
@@ -312,7 +348,7 @@ export default function Dashboard() {
 
   const stats = {
     total: households.length,
-    routes: routes.length,
+    routes: routes.filter(r => r.status !== 'pending').length,
     verified: households.filter(h => h.verification_status?.toLowerCase() === 'verified' || h.approval_status === 'approved').length,
     paid: households.filter(h => h.payment_status === 'paid' || (h.payment_documents?.length ?? 0) > 0).length
   }
@@ -327,8 +363,11 @@ export default function Dashboard() {
     withFileNo: households.filter(h => h.file_number).length,
   }
 
-  const ruralRoutes = routes.filter(r => r.type === 'Rural')
-  const urbanRoutes = routes.filter(r => r.type === 'Urban')
+  // Pending routes are held out of the selectable lists until an RCO approves
+  // them (they show in the "Routes Pending RCO Approval" strip instead).
+  const approvedRoutes = routes.filter(r => r.status !== 'pending')
+  const ruralRoutes = approvedRoutes.filter(r => r.type === 'Rural')
+  const urbanRoutes = approvedRoutes.filter(r => r.type === 'Urban')
 
   const matchesSearch = (h) => {
     if (!searchQuery) return true
@@ -439,20 +478,10 @@ export default function Dashboard() {
       // If user can approve (Admin or Mamokuena), save directly
       if (canApprove) {
         const landAssets = Array.isArray(editedData.land_assets_json) ? editedData.land_assets_json : []
-        const num = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : parseFloat(v)
-        const assetsSubtotal = landAssets.reduce((sum, a) => sum + num(a.affected_area_perm) * num(a.rate_perm) + num(a.affected_area_temp) * num(a.rate_temp), 0)
-        const disturbance = num(editedData.disturbance_allowance)
-        // For single-asset (legacy) PAPs, derive total from the underlying
-        // inputs rather than trusting a stale editedData.total_compensation.
-        // Rates are locked in the UI so user-typed area changes will reliably
-        // produce the right total.
-        const legacySingleTotal =
-          num(editedData.affected_area_perm) * num(editedData.rate_perm) +
-          num(editedData.affected_area_temp) * num(editedData.rate_temp) +
-          disturbance
-        const computedTotal = landAssets.length > 0
-          ? (assetsSubtotal + disturbance)
-          : legacySingleTotal
+        // Derive total from the underlying inputs (land assets or legacy
+        // area × rate fields, plus Other Affected Assets and disturbance)
+        // rather than trusting a stale editedData.total_compensation.
+        const computedTotal = computeHouseholdTotal(editedData)
         const { error } = await supabase
           .from('households')
           .update({
@@ -578,6 +607,14 @@ export default function Dashboard() {
         updates.last_edited_at = new Date().toISOString()
         updates.pending_approval = false
         updates.verification_status = 'verified'
+
+        // Recompute Total Compensation from the merged result so approved
+        // valuation edits (areas, land assets, other assets, disturbance)
+        // can't leave a stale total behind.
+        const baseRow = households.find(h => h.id === request.household_id)
+        if (baseRow) {
+          updates.total_compensation = computeHouseholdTotal({ ...baseRow, ...updates })
+        }
 
         const { error: updateError } = await supabase
           .from('households')
@@ -1195,6 +1232,89 @@ export default function Dashboard() {
     }
   }
 
+  // Add a new route. Any editor can propose one; RCO/admin routes go live
+  // immediately, everyone else's sit as 'pending' until an RCO approves.
+  const handleAddRoute = async ({ name, type }) => {
+    const trimmed = (name || '').trim()
+    if (!trimmed) { alert('Route name is required.'); return false }
+    const duplicate = routes.find(r => r.name.trim().toLowerCase() === trimmed.toLowerCase())
+    if (duplicate) { alert(`A route named "${duplicate.name}" already exists.`); return false }
+    try {
+      const now = new Date().toISOString()
+      const row = {
+        route_name: trimmed,
+        route_type: type,
+        pap_count: 0,
+        status: isRouteApprover ? 'approved' : 'pending',
+        created_by: user?.id,
+        created_by_name: user?.full_name || user?.username || 'Unknown',
+      }
+      if (isRouteApprover) {
+        row.reviewed_by = user?.id
+        row.reviewed_by_name = user?.full_name
+        row.reviewed_at = now
+      }
+      const { error } = await supabase.from('routes').insert(row)
+      if (error) throw error
+
+      if (!isRouteApprover) {
+        // Let the RCOs (and admin) know there's a route waiting for review.
+        await supabase.from('notifications').insert([
+          { user_role: 'rco', type: 'route_request', title: 'New Route Proposed', message: `${row.created_by_name} proposed a new ${type} route: "${trimmed}". Approval needed.` },
+          { user_role: 'Admin', type: 'route_request', title: 'New Route Proposed', message: `${row.created_by_name} proposed a new ${type} route: "${trimmed}". Approval needed.` },
+        ])
+      }
+
+      await loadData()
+      await loadNotifications()
+      alert(isRouteApprover
+        ? `✅ Route "${trimmed}" added.`
+        : `✅ Route "${trimmed}" submitted — it will become available once an RCO approves it.`)
+      return true
+    } catch (err) {
+      console.error('Add route error:', err)
+      alert('Error adding route: ' + err.message)
+      return false
+    }
+  }
+
+  // RCO/admin review of a proposed route.
+  const handleReviewRoute = async (route, approved) => {
+    try {
+      let note = null
+      if (!approved) {
+        note = prompt(`Reject route "${route.name}"? Optionally give a reason:`)
+        if (note === null) return // cancelled
+      }
+      const { error } = await supabase
+        .from('routes')
+        .update({
+          status: approved ? 'approved' : 'rejected',
+          reviewed_by: user?.id,
+          reviewed_by_name: user?.full_name,
+          reviewed_at: new Date().toISOString(),
+          review_note: note || null,
+        })
+        .eq('id', route.id)
+      if (error) throw error
+      // Tell the proposer what happened.
+      if (route.created_by) {
+        await supabase.from('notifications').insert({
+          user_id: route.created_by,
+          type: approved ? 'approval' : 'rejection',
+          title: approved ? 'Route Approved ✅' : 'Route Not Approved',
+          message: `Your route "${route.name}" was ${approved ? 'approved' : 'rejected'} by ${user?.full_name}${note ? ' — ' + note : ''}`,
+        })
+      }
+      await loadData()
+      await loadNotifications()
+      alert(approved ? `✅ Route "${route.name}" approved.` : `Route "${route.name}" rejected.`)
+    } catch (err) {
+      console.error('Route review error:', err)
+      alert('Error reviewing route: ' + err.message)
+    }
+  }
+
   const handleExportExcel = () => {
     // Prepare data for export
     const exportData = households.map(h => ({
@@ -1586,7 +1706,7 @@ export default function Dashboard() {
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{ROLE_LABELS[(user?.role || '').toLowerCase()] || user?.role}{canApprove ? ' • Can Approve' : isViewOnly ? ' • View Only' : ''}</span>
             </div>
-            {canApprove && (
+            {canEdit && (
               <button onClick={() => setShowRatesModal(true)}
                 title="Manage valuation rates"
                 style={{ padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
@@ -1676,15 +1796,60 @@ export default function Dashboard() {
                 boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                 scrollMarginTop: '16px'
               }}>
-                <h2 style={{ 
-                  fontSize: '18px', fontWeight: '700', color: colors.textDark, 
-                  margin: '0 0 20px 0', display: 'flex', alignItems: 'center', gap: '10px' 
-                }}>
-                  <div style={{ padding: '8px', backgroundColor: `${colors.primary}10`, borderRadius: '8px' }}>
-                    <MapIcon size={22} color={colors.primary} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 20px 0', gap: '12px', flexWrap: 'wrap' }}>
+                  <h2 style={{
+                    fontSize: '18px', fontWeight: '700', color: colors.textDark,
+                    margin: 0, display: 'flex', alignItems: 'center', gap: '10px'
+                  }}>
+                    <div style={{ padding: '8px', backgroundColor: `${colors.primary}10`, borderRadius: '8px' }}>
+                      <MapIcon size={22} color={colors.primary} />
+                    </div>
+                    Select a Route
+                  </h2>
+                  {canEdit && (
+                    <button onClick={() => setShowAddRoute(true)} style={{
+                      display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 16px',
+                      backgroundColor: `${colors.accent}15`, color: colors.accent,
+                      border: `1px dashed ${colors.accent}`, borderRadius: '10px',
+                      fontSize: '13px', fontWeight: 700, cursor: 'pointer'
+                    }}>
+                      <Plus size={15} /> Add Route
+                    </button>
+                  )}
+                </div>
+
+                {/* Routes waiting for RCO approval */}
+                {routes.some(r => r.status === 'pending') && (
+                  <div style={{
+                    marginBottom: '20px', padding: '14px 16px',
+                    backgroundColor: `${colors.warning}10`, border: `1px solid ${colors.warning}40`,
+                    borderRadius: '12px'
+                  }}>
+                    <p style={{ margin: '0 0 10px 0', fontSize: '13px', fontWeight: 700, color: colors.warning, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                      Routes Pending RCO Approval
+                    </p>
+                    <div style={{ display: 'grid', gap: '8px' }}>
+                      {routes.filter(r => r.status === 'pending').map(r => (
+                        <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', backgroundColor: colors.bgCard, borderRadius: '8px', padding: '10px 14px', border: `1px solid ${colors.border}` }}>
+                          <div>
+                            <span style={{ fontSize: '14px', fontWeight: 600, color: colors.textDark }}>{r.name}</span>
+                            <span style={{ fontSize: '12px', color: colors.textMuted, marginLeft: '8px' }}>
+                              {r.type} • added by {r.created_by_name || 'Unknown'}{r.created_at ? ` on ${new Date(r.created_at).toLocaleDateString()}` : ''}
+                            </span>
+                          </div>
+                          {isRouteApprover ? (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button onClick={() => handleReviewRoute(r, true)} style={{ padding: '6px 14px', backgroundColor: colors.success, color: 'white', border: 'none', borderRadius: '7px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>Approve</button>
+                              <button onClick={() => handleReviewRoute(r, false)} style={{ padding: '6px 14px', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '7px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>Reject</button>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: colors.warning }}>Awaiting RCO approval</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  Select a Route
-                </h2>
+                )}
 
                 {loading ? (
                   <div style={{ padding: '60px', textAlign: 'center' }}>
@@ -2004,7 +2169,8 @@ export default function Dashboard() {
               onFieldChange={handleFieldChange}
               onSave={handleSave}
               onPhotoUpload={handlePhotoUpload}
-              routes={routes}
+              routes={approvedRoutes}
+              landRateOptions={landRateOptions}
               onDocumentUpload={handleDocumentUpload}
               onDeleteDocument={handleDeleteDocument}
               onCAFUpload={handleCAFUpload}
@@ -2031,6 +2197,18 @@ export default function Dashboard() {
             </>
           )}
         </div>
+      {/* Add Route Modal */}
+      {showAddRoute && canEdit && (
+        <AddRouteModal
+          onClose={() => setShowAddRoute(false)}
+          onSubmit={async (payload) => {
+            const ok = await handleAddRoute(payload)
+            if (ok) setShowAddRoute(false)
+          }}
+          isRouteApprover={isRouteApprover}
+          colors={colors}
+        />
+      )}
       {/* Add PAP Modal */}
       {showAddPAP && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -2107,7 +2285,7 @@ export default function Dashboard() {
       )}
 
       {/* Rates Master Modal */}
-      {showRatesModal && canApprove && (
+      {showRatesModal && canEdit && (
         <RatesMasterModal
           user={user}
           onClose={() => setShowRatesModal(false)}
@@ -2220,6 +2398,11 @@ function RouteCard({ route, onClick, type, households }) {
             <div style={{ width: `${progressPercent}%`, height: '100%', backgroundColor: cardColors.text, borderRadius: '3px' }} />
           </div>
           <p style={{ margin: '4px 0 0 0', fontSize: '10px', color: colors.textMuted }}>{verifiedCount} verified ({progressPercent}%)</p>
+          {route.created_by_name && (
+            <p style={{ margin: '4px 0 0 0', fontSize: '10px', color: colors.textMuted }}>
+              Added by {route.created_by_name}{route.created_at ? ` • ${new Date(route.created_at).toLocaleDateString()}` : ''}
+            </p>
+          )}
         </div>
         <div style={{ 
           width: '32px', height: '32px', borderRadius: '8px', 
@@ -2228,6 +2411,73 @@ function RouteCard({ route, onClick, type, households }) {
           marginLeft: '12px'
         }}>
           <ChevronRight size={18} color={cardColors.text} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Add Route Modal — any editor can propose a route; RCO/admin additions go
+// live immediately, everyone else's wait for RCO approval.
+function AddRouteModal({ onClose, onSubmit, isRouteApprover, colors }) {
+  const [name, setName] = useState('')
+  const [type, setType] = useState('Rural')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    setSaving(true)
+    try {
+      await onSubmit({ name, type })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div style={{ backgroundColor: colors.bgCard, borderRadius: '16px', width: '100%', maxWidth: '440px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ fontSize: '17px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Add New Route</h2>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '4px 0 0 0' }}>
+              {isRouteApprover
+                ? 'The route becomes available immediately.'
+                : 'The route will need approval from an RCO before it becomes available.'}
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
+        </div>
+        <div style={{ padding: '20px 24px', display: 'grid', gap: '16px' }}>
+          <div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 600 }}>Route Name *</p>
+            <input
+              type="text" value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Khukhune - Muela Junction" autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter' && name.trim() && !saving) submit() }}
+              style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 6px 0', fontWeight: 600 }}>Route Type *</p>
+            <select value={type} onChange={(e) => setType(e.target.value)}
+              style={{ width: '100%', padding: '10px 14px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '14px', outline: 'none', backgroundColor: colors.bgCard, boxSizing: 'border-box' }}>
+              <option value="Rural">Rural</option>
+              <option value="Urban">Urban</option>
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+            <button onClick={onClose} style={{ flex: 1, padding: '11px', backgroundColor: colors.bgLight, border: `1px solid ${colors.border}`, borderRadius: '10px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', color: colors.textDark }}>
+              Cancel
+            </button>
+            <button onClick={submit} disabled={!name.trim() || saving} style={{
+              flex: 1, padding: '11px',
+              backgroundColor: name.trim() && !saving ? colors.accent : colors.border,
+              border: 'none', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+              cursor: name.trim() && !saving ? 'pointer' : 'not-allowed', color: 'white'
+            }}>
+              {saving ? 'Saving…' : (isRouteApprover ? 'Add Route' : 'Submit for Approval')}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -2369,7 +2619,7 @@ function CommentsSection({ household, user, isAdmin, colors, onRefresh }) {
 }
 
 // Detail View Component
-function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, canApprove = false, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, assetRateOptions = [], user, colors }) {
+function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, canApprove = false, isViewOnly = false, saving, activeTab, setActiveTab, setEditMode, setEditedData, onFieldChange, onSave, onPhotoUpload, onDocumentUpload, onDeleteDocument, onCAFUpload, onDeleteCAF, onMarkCAFSigned, onPaymentDocUpload, onDeletePaymentDoc, onUpdatePayment, onDeletePAP, onOpenMerge, onMovePAP, onRefresh, onPrint, routes, occupationOptions, onPreviewDoc, assetRateOptions = [], landRateOptions = [], user, colors }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showCustomOccupation, setShowCustomOccupation] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -2657,7 +2907,7 @@ function DetailView({ household, editedData, editMode, isAdmin, canEdit = true, 
       {activeTab === 'valuation' && (
         <div style={{ display: 'grid', gap: '20px' }}>
           <Card title="Affected Area & Compensation" icon={Home} color={colors.primary} colors={colors}>
-            <LandAssetsValuation data={data} editMode={editMode} isAdmin={isAdmin} onFieldChange={onFieldChange} colors={colors} />
+            <LandAssetsValuation data={data} editMode={editMode} isAdmin={isAdmin} onFieldChange={onFieldChange} colors={colors} landRateOptions={landRateOptions} />
           </Card>
 
           <Card title="Other Affected Assets" icon={TreePine} color={colors.rural} colors={colors}>
@@ -2811,18 +3061,61 @@ const numOrZero = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? 0 : p
 const assetSubtotal = (a) => numOrZero(a.affected_area_perm) * numOrZero(a.rate_perm) + numOrZero(a.affected_area_temp) * numOrZero(a.rate_temp)
 const formatM = (n) => 'M ' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors }) {
+// Total value of the Other Affected Assets list (qty × rate per row).
+const otherAssetsTotalOf = (assets) => {
+  let parsed = []
+  try {
+    parsed = typeof assets === 'string' ? JSON.parse(assets) : (assets || [])
+  } catch (e) {
+    parsed = []
+  }
+  if (!Array.isArray(parsed)) parsed = []
+  return parsed.reduce((sum, a) => sum + numOrZero(a.quantity) * numOrZero(a.rate), 0)
+}
+
+// Single source of truth for a PAP's Total Compensation:
+//   land part (multi-asset rows, or legacy area × rate fields)
+//   + Other Affected Assets (qty × rate)
+//   + disturbance allowance.
+// Mirrors the SQL recompute in apply_land_rate_change / apply_asset_rate_change.
+const computeHouseholdTotal = (h) => {
+  const landAssets = Array.isArray(h.land_assets_json) ? h.land_assets_json : []
+  const landPart = landAssets.length > 0
+    ? landAssets.reduce((sum, a) => sum + assetSubtotal(a), 0)
+    : numOrZero(h.affected_area_perm) * numOrZero(h.rate_perm) + numOrZero(h.affected_area_temp) * numOrZero(h.rate_temp)
+  return landPart + otherAssetsTotalOf(h.other_assets_json) + numOrZero(h.disturbance_allowance)
+}
+
+function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors, landRateOptions = [] }) {
   const stored = Array.isArray(data.land_assets_json) ? data.land_assets_json : []
   const hasMulti = stored.length > 0
   const legacyHasValues = !!(data.affected_area_perm || data.affected_area_temp || data.rate_perm || data.rate_temp || data.land_use)
+
+  // Official rates for this PAP's route type, from the Rates Master. Used to
+  // auto-fill rate_perm/rate_temp when a row is added or its land use changes
+  // — without this, new rows sit at rate 0 and the total never moves.
+  const findLandRate = (landUse) =>
+    landRateOptions.find(r => r.land_use === landUse && r.route_type === data.route_type) || null
 
   const updateAssets = (next) => onFieldChange('land_assets_json', next)
   const updateAsset = (idx, patch) => {
     const next = stored.map((a, i) => i === idx ? { ...a, ...patch } : a)
     updateAssets(next)
   }
+  const changeAssetLandUse = (idx, landUse) => {
+    const meta = findLandRate(landUse)
+    updateAsset(idx, {
+      land_use: landUse,
+      ...(meta ? { rate_perm: meta.rate_perm ?? '', rate_temp: meta.rate_temp ?? '' } : {}),
+    })
+  }
   const addAsset = () => {
-    updateAssets([...stored, { land_use: 'Res', affected_area_perm: '', affected_area_temp: '', rate_perm: '', rate_temp: '' }])
+    const meta = findLandRate('Res')
+    updateAssets([...stored, {
+      land_use: 'Res',
+      affected_area_perm: '', affected_area_temp: '',
+      rate_perm: meta?.rate_perm ?? '', rate_temp: meta?.rate_temp ?? '',
+    }])
   }
   const removeAsset = (idx) => {
     if (!confirm('Remove this asset row?')) return
@@ -2840,7 +3133,8 @@ function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors })
 
   const subtotal = stored.reduce((s, a) => s + assetSubtotal(a), 0)
   const disturbance = numOrZero(data.disturbance_allowance)
-  const total = hasMulti ? subtotal + disturbance : (data.total_compensation || 0)
+  const otherAssetsTotal = otherAssetsTotalOf(data.other_assets_json)
+  const total = subtotal + otherAssetsTotal + disturbance
 
   // Multi-asset rendering
   if (hasMulti) {
@@ -2860,7 +3154,7 @@ function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors })
                 <tr key={idx} style={{ borderBottom: `1px solid ${colors.border}` }}>
                   <td style={{ padding: '10px 12px' }}>
                     {editMode ? (
-                      <select value={a.land_use || ''} onChange={(e) => updateAsset(idx, { land_use: e.target.value })} style={{ padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', backgroundColor: colors.bgCard }}>
+                      <select value={a.land_use || ''} onChange={(e) => changeAssetLandUse(idx, e.target.value)} style={{ padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', backgroundColor: colors.bgCard }}>
                         {LAND_USE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                       </select>
                     ) : (
@@ -2902,10 +3196,14 @@ function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors })
             <Plus size={14} /> Add Asset
           </button>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', borderTop: `1px solid ${colors.border}`, paddingTop: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', borderTop: `1px solid ${colors.border}`, paddingTop: '16px' }}>
           <div>
-            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Assets Subtotal</p>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Land Assets Subtotal</p>
             <p style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>{formatM(subtotal)}</p>
+          </div>
+          <div>
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Other Assets</p>
+            <p style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>{formatM(otherAssetsTotal)}</p>
           </div>
           <div>
             <p style={{ fontSize: '12px', color: colors.textMuted, margin: '0 0 4px 0', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>Disturbance Allowance</p>
@@ -2925,23 +3223,34 @@ function LandAssetsValuation({ data, editMode, isAdmin, onFieldChange, colors })
   }
 
   // Legacy single-asset rendering (preserved for existing PAPs)
-  // Total auto-computed from areas × rates + disturbance so users (or surveyors)
-  // can't accidentally desync the figure from its inputs.
+  // Total auto-computed from areas × rates + other assets + disturbance so
+  // users (or surveyors) can't accidentally desync the figure from its inputs.
   const legacyTotal = (
     numOrZero(data.affected_area_perm) * numOrZero(data.rate_perm) +
     numOrZero(data.affected_area_temp) * numOrZero(data.rate_temp) +
+    otherAssetsTotal +
     numOrZero(data.disturbance_allowance)
   )
+  // Changing land use re-pulls the official rates for this route type so the
+  // locked rate fields (and therefore the total) follow the Rates Master.
+  const changeLegacyLandUse = (field, value) => {
+    onFieldChange(field, value)
+    const meta = findLandRate(value)
+    if (meta) {
+      onFieldChange('rate_perm', meta.rate_perm ?? '')
+      onFieldChange('rate_temp', meta.rate_temp ?? '')
+    }
+  }
   return (
     <div style={{ display: 'grid', gap: '16px' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-        <Field label="Land Use" value={data.land_use} field="land_use" editMode={editMode} onChange={onFieldChange} colors={colors} options={LAND_USE_OPTIONS} />
+        <Field label="Land Use" value={data.land_use} field="land_use" editMode={editMode} onChange={changeLegacyLandUse} colors={colors} options={LAND_USE_OPTIONS} />
         <Field label="Permanent Area (sqm)" value={data.affected_area_perm} field="affected_area_perm" editMode={editMode} onChange={onFieldChange} colors={colors} />
         <Field label="Temporary Area (sqm)" value={data.affected_area_temp} field="affected_area_temp" editMode={editMode} onChange={onFieldChange} colors={colors} />
         <Field label="Perm. Rate (M/sqm)" value={data.rate_perm} field="rate_perm" editMode={editMode} colors={colors} locked hint="Set in the Rates table" />
         <Field label="Temp. Rate (M/sqm)" value={data.rate_temp} field="rate_temp" editMode={editMode} colors={colors} locked hint="Set in the Rates table" />
         <Field label="Disturbance Allowance (M)" value={data.disturbance_allowance} field="disturbance_allowance" editMode={editMode} onChange={onFieldChange} colors={colors} />
-        <Field label="Total Compensation (M)" value={legacyTotal} field="total_compensation" editMode={editMode} highlight colors={colors} locked hint="Auto-calculated: perm area × perm rate + temp area × temp rate + disturbance" />
+        <Field label="Total Compensation (M)" value={legacyTotal} field="total_compensation" editMode={editMode} highlight colors={colors} locked hint="Auto-calculated: perm area × perm rate + temp area × temp rate + other assets + disturbance" />
       </div>
       {editMode && isAdmin && (
         <button onClick={legacyHasValues ? convertLegacyToMulti : addAsset} style={{ alignSelf: 'flex-start', padding: '8px 14px', backgroundColor: `${colors.accent}15`, color: colors.accent, border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -3087,6 +3396,8 @@ function OtherAssets({ assets, editMode, onChange, assetRateOptions = [], colors
     onChange?.(parsed.filter((_, i) => i !== idx))
   }
 
+  const sectionTotal = parsed.reduce((s, a) => s + computeValue(a.quantity, a.rate), 0)
+
   if (!editMode) {
     if (parsed.length === 0) {
       return <p style={{ color: colors.textMuted, fontSize: '14px', margin: 0 }}>No other assets recorded</p>
@@ -3105,6 +3416,9 @@ function OtherAssets({ assets, editMode, onChange, assetRateOptions = [], colors
             </span>
           </div>
         ))}
+        <p style={{ margin: '2px 4px 0 0', fontSize: '13px', color: colors.textDark, textAlign: 'right' }}>
+          Other assets subtotal (included in Total Compensation): <span style={{ fontWeight: 700, color: colors.accent }}>{formatM(sectionTotal)}</span>
+        </p>
       </div>
     )
   }
@@ -3183,14 +3497,21 @@ function OtherAssets({ assets, editMode, onChange, assetRateOptions = [], colors
         )
       })}
 
-      <button onClick={addRow} style={{
-        alignSelf: 'flex-start', padding: '8px 14px',
-        backgroundColor: `${colors.accent}15`, color: colors.accent,
-        border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer',
-        fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px'
-      }}>
-        <Plus size={14} /> Add asset
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+        <button onClick={addRow} style={{
+          alignSelf: 'flex-start', padding: '8px 14px',
+          backgroundColor: `${colors.accent}15`, color: colors.accent,
+          border: `1px dashed ${colors.accent}`, borderRadius: '8px', cursor: 'pointer',
+          fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px'
+        }}>
+          <Plus size={14} /> Add asset
+        </button>
+        {parsed.length > 0 && (
+          <p style={{ margin: 0, fontSize: '13px', color: colors.textDark }}>
+            Other assets subtotal (included in Total Compensation): <span style={{ fontWeight: 700, color: colors.accent }}>{formatM(sectionTotal)}</span>
+          </p>
+        )}
+      </div>
     </div>
   )
 }
@@ -3520,14 +3841,18 @@ function CAFUploader({ caf, onUpload, onDelete, onPreview, onMarkSigned, isAdmin
 }
 
 // Document Preview Modal
-// Rates Master Modal — admin tool to edit official valuation rates and propagate
-// changes to existing PAPs. Two sections:
+// Rates Master Modal — edit official valuation rates and propagate changes to
+// existing PAPs. Open to all editors; every change is recorded in
+// rates_audit_log (via DB triggers) and shown in the Change History tab.
+// Sections:
 //   1. Land rates — keyed by (land_use, route_type), per-sqm permanent + temporary.
 //   2. Asset rates — keyed by asset_type, single rate (matches other_assets_json entries).
+//   3. Change History — who changed which rate, when, old → new.
 function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
   const [section, setSection] = useState('land')
   const [landRates, setLandRates] = useState([])
   const [assetRates, setAssetRates] = useState([])
+  const [auditRows, setAuditRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState(null)
   const [edits, setEdits] = useState({}) // id → { rate_perm?, rate_temp?, rate? }
@@ -3537,13 +3862,15 @@ function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
 
   const load = async () => {
     setLoading(true)
-    const [{ data: lr, error: e1 }, { data: ar, error: e2 }] = await Promise.all([
+    const [{ data: lr, error: e1 }, { data: ar, error: e2 }, { data: audit }] = await Promise.all([
       supabase.from('valuation_land_rates').select('*').order('land_use').order('route_type'),
       supabase.from('valuation_asset_rates').select('*').order('category').order('asset_type'),
+      supabase.from('rates_audit_log').select('*').order('changed_at', { ascending: false }).limit(100),
     ])
     if (e1 || e2) { alert('Failed to load rates: ' + (e1 || e2).message); setLoading(false); return }
     setLandRates(lr || [])
     setAssetRates(ar || [])
+    setAuditRows(audit || [])
     setEdits({})
     setLoading(false)
   }
@@ -3680,13 +4007,14 @@ function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h2 style={{ fontSize: '18px', fontWeight: 700, color: colors.textDark, margin: 0 }}>Valuation Rates Master</h2>
-            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>Admin-only. Each Save &amp; Propagate updates the master row and rewrites matching values across all PAPs (totals are recomputed automatically).</p>
+            <p style={{ fontSize: '13px', color: colors.textMuted, margin: '4px 0 0 0' }}>Each Save &amp; Propagate updates the master row and rewrites matching values across all PAPs (totals are recomputed automatically). Every change is recorded under Change History.</p>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}><X size={20} color={colors.textMuted} /></button>
         </div>
         <div style={{ padding: '14px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           {tabBtn('land', 'Land Rates')}
           {tabBtn('asset', 'Asset Rates')}
+          {tabBtn('history', 'Change History')}
           <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: colors.textLight }} />
             <input type="text" placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: '100%', padding: '8px 12px 8px 38px', border: `1px solid ${colors.border}`, borderRadius: '8px', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
@@ -3695,6 +4023,41 @@ function RatesMasterModal({ user, onClose, onAfterPropagate, colors }) {
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 24px' }}>
           {loading ? (
             <p style={{ padding: '40px', textAlign: 'center', color: colors.textMuted }}>Loading…</p>
+          ) : section === 'history' ? (
+            auditRows.length === 0 ? (
+              <p style={{ padding: '40px', textAlign: 'center', color: colors.textMuted }}>No rate changes recorded yet.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {auditRows.map(row => {
+                  const fmtVals = (v) => {
+                    if (!v) return '—'
+                    if (row.rate_table === 'valuation_land_rates') {
+                      return `Perm M ${v.rate_perm ?? '—'} / Temp M ${v.rate_temp ?? '—'}`
+                    }
+                    return `M ${v.rate ?? '—'}`
+                  }
+                  const actionLabel = { INSERT: 'added', UPDATE: 'updated', DELETE: 'removed' }[row.action] || row.action.toLowerCase()
+                  return (
+                    <div key={row.id} style={{ padding: '12px 16px', backgroundColor: colors.bgLight, borderRadius: '10px', border: `1px solid ${colors.border}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: colors.textDark }}>
+                          {row.rate_table === 'valuation_land_rates' ? 'Land rate' : 'Asset rate'}: {row.rate_label}
+                        </span>
+                        <span style={{ fontSize: '12px', color: colors.textMuted }}>
+                          {new Date(row.changed_at).toLocaleString()}
+                        </span>
+                      </div>
+                      <p style={{ margin: '6px 0 0 0', fontSize: '13px', color: colors.textMuted }}>
+                        <span style={{ fontWeight: 600, color: colors.textDark }}>{row.changed_by_name || 'Unknown'}</span> {actionLabel} this rate
+                        {row.action === 'UPDATE' && <> — {fmtVals(row.old_values)} <span style={{ color: colors.textLight }}>→</span> <span style={{ fontWeight: 600, color: colors.accent }}>{fmtVals(row.new_values)}</span></>}
+                        {row.action === 'INSERT' && <> — {fmtVals(row.new_values)}</>}
+                        {row.action === 'DELETE' && <> — was {fmtVals(row.old_values)}</>}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+            )
           ) : section === 'land' ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px' }}>
               {['Rural', 'Urban'].map(rt => (
@@ -3990,6 +4353,10 @@ function resolveMergeResult(winner, loser, { combineAssets = false } = {}) {
     payment_documents: concat(winner.payment_documents, loser.payment_documents),
     comments:          concat(winner.comments,          loser.comments),
   }
+
+  // Recompute Total Compensation from the merged result — combined land and
+  // other assets change the total, so a carried-over figure would be stale.
+  scalarUpdates.total_compensation = computeHouseholdTotal({ ...winner, ...scalarUpdates, ...arrayUpdates })
 
   return {
     scalarUpdates,

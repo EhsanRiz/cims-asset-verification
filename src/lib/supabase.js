@@ -24,10 +24,12 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 //   user                          — legacy field-surveyor role, preserved for Mamokuena
 //   client                        — legacy client tier, preserved (LLWDSP III view)
 //   clo, arco, rco, essm          — editor: can view + add/edit PAPs
-//   assistant_clo, pm, ict_dmo    — view-only: can view, no edits
+//   assistant_clo                 — editor: can upload photos/documents/CAFs and
+//                                   edit values (changes go through approval)
+//   pm, ict_dmo                   — view-only: can view, no edits
 // ──────────────────────────────────────────────────────────────────────────────
-export const EDITOR_ROLES    = new Set(['admin', 'user', 'clo', 'arco', 'rco', 'essm'])
-export const VIEW_ONLY_ROLES = new Set(['assistant_clo', 'pm', 'ict_dmo', 'client'])
+export const EDITOR_ROLES    = new Set(['admin', 'user', 'clo', 'arco', 'rco', 'essm', 'assistant_clo'])
+export const VIEW_ONLY_ROLES = new Set(['pm', 'ict_dmo', 'client'])
 
 export function canEdit(role) {
   return EDITOR_ROLES.has((role || '').toLowerCase())

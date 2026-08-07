@@ -13,7 +13,7 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIs
 
 // Roles allowed to upload/delete documents. Mirrors EDITOR_ROLES in
 // src/lib/supabase.js — keep in sync.
-const EDITOR_ROLES = new Set(['admin', 'user', 'clo', 'arco', 'rco', 'essm'])
+const EDITOR_ROLES = new Set(['admin', 'user', 'clo', 'arco', 'rco', 'essm', 'assistant_clo'])
 
 async function requireAuth(req, res, next) {
   try {
