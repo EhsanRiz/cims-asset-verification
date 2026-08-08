@@ -13,7 +13,7 @@
     --line:#dde4e0; --tint:#f2f8f4; --tint-blue:#eef7fc; --paper:#ffffff;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
-  img[src*="logo-4d"]{mix-blend-mode:multiply;}
+  a{color:inherit;text-decoration:none;}
   body{font-family:"Liberation Sans",Arial,Helvetica,sans-serif;color:var(--ink);font-size:9.6pt;line-height:1.5;background:#fff;}
   .page{width:210mm;height:296mm;padding:15mm 15mm 14mm;position:relative;page-break-after:always;overflow:hidden;background:var(--paper);}
   .page:last-child{page-break-after:auto;}
@@ -41,7 +41,7 @@
 
   /* cover */
   .cover{padding:0;display:flex;flex-direction:column;}
-  .cover .band{background:linear-gradient(90deg,var(--brand) 0 55%,var(--brand-dark));color:#fff;padding:5mm 18mm;display:flex;justify-content:space-between;align-items:center;font-size:8pt;letter-spacing:.2em;text-transform:uppercase;}
+  .cover .band{background:var(--brand);color:#fff;padding:5mm 18mm;display:flex;justify-content:space-between;align-items:center;font-size:8pt;letter-spacing:.2em;text-transform:uppercase;}
   .cover .body{flex:1;padding:16mm 18mm 0;display:flex;flex-direction:column;}
   .cover .logo{height:22mm;align-self:flex-start;}
   .cover .mid{flex:1;display:flex;flex-direction:column;justify-content:center;}
@@ -70,7 +70,7 @@
   .cap p{color:#4f586b;}
 
   /* CIMS flagship */
-  .flag-banner{background:linear-gradient(135deg,var(--brand-deep),var(--brand-dark) 70%);color:#fff;border-radius:2mm;padding:6mm 7mm;margin-bottom:5mm;}
+  .flag-banner{background:var(--brand-dark);color:#fff;border-radius:2mm;padding:6mm 7mm;margin-bottom:5mm;}
   .flag-banner .k{font-size:7.5pt;letter-spacing:.25em;text-transform:uppercase;color:#9be0b6;margin-bottom:1.6mm;}
   .flag-banner h2{font-size:16.5pt;line-height:1.15;}
   .flag-banner p{margin-top:2mm;color:#dcefe3;font-size:9.6pt;max-width:168mm;}
@@ -132,7 +132,7 @@
 
   /* back cover */
   .back{padding:0;display:flex;flex-direction:column;}
-  .back .band{background:linear-gradient(90deg,var(--brand) 0 55%,var(--brand-dark));color:#fff;padding:5mm 18mm;display:flex;justify-content:space-between;align-items:center;font-size:8pt;letter-spacing:.2em;text-transform:uppercase;}
+  .back .band{background:var(--brand);color:#fff;padding:5mm 18mm;display:flex;justify-content:space-between;align-items:center;font-size:8pt;letter-spacing:.2em;text-transform:uppercase;}
   .back .body{flex:1;padding:16mm 18mm;display:flex;flex-direction:column;justify-content:center;}
   .back h1{font-size:24pt;line-height:1.18;letter-spacing:-.01em;color:var(--ink);max-width:160mm;}
   .back h1 .g{color:var(--brand);}
@@ -170,7 +170,7 @@
     </div>
     <div style="text-align:right;">
       <span class="values">Creative · Innovative · Green · Sustainable</span><br>
-      info@4dcs.co.za · +266 2232 3442 · www.4dcs.co.za
+      <a href="mailto:info@4dcs.co.za">info@4dcs.co.za</a> · +266 2232 3442 · <a href="https://www.4dcs.co.za">www.4dcs.co.za</a>
     </div>
   </div>
 </div>
@@ -277,7 +277,7 @@
     <div>
       <h3>AI &amp; smart data systems</h3>
       <p>AI-powered decision support and advisory platforms through our dedicated 4D AI division
-      (ai.4dcs.co.za): retrieval-augmented (RAG) advisory systems, AI vision for real-time
+      (<a href="https://ai.4dcs.co.za" style="color:var(--blue-dark);">ai.4dcs.co.za</a>): retrieval-augmented (RAG) advisory systems, AI vision for real-time
       monitoring, and predictive analytics — engineered for low-bandwidth environments, local
       languages, and African realities, using Anthropic Claude AI.</p>
     </div>
@@ -324,7 +324,7 @@
     reconciliation with a single, secure, auditable source of truth.</p>
     <div class="flag-meta">
       <span><b>Client context:</b> LLWDP III (African Development Bank–financed)</span>
-      <span><b>Status:</b> Live — cims.4dcs.co.za</span>
+      <span><b>Status:</b> Live — <a href="https://cims.4dcs.co.za">cims.4dcs.co.za</a></span>
       <span><b>Developed &amp; operated by:</b> 4D Climate Solutions</span>
     </div>
   </div>
@@ -467,7 +467,7 @@
     <img src="assets/logo-4d.png" alt="4D">
   </div>
 
-  <div class="flag-banner" style="background:linear-gradient(135deg,#0b4d68,var(--blue-dark) 70%);">
+  <div class="flag-banner" style="background:#0e5f81;">
     <div class="k" style="color:#9fdcf5;">Research collaboration · University of Virginia</div>
     <h2 style="font-size:14.5pt;">AI for Agricultural Resilience — UVA × 4D Decision Support System</h2>
     <p>With faculty at the University of Virginia and the National University of Lesotho, 4D
@@ -495,13 +495,13 @@
     </div>
     <div class="app">
       <div class="head"><h3>Tafela</h3></div>
-      <p>Digital ordering and hospitality platform connecting customers with local food
-      businesses.</p>
+      <p>Education platform connecting students with teachers for tutoring and learning
+      support. <a href="https://tafela.co.za" style="color:var(--blue-dark);">tafela.co.za</a></p>
     </div>
     <div class="app">
       <div class="head"><h3>RxPlan</h3></div>
       <p>AI-based prescription and medication planning support for health facilities and
-      pharmacies.</p>
+      pharmacies. <a href="https://rxplan.co.za" style="color:var(--blue-dark);">rxplan.co.za</a></p>
     </div>
   </div>
 
@@ -855,10 +855,10 @@
       </div>
       <div class="cbox b">
         <h4>Reach us</h4>
-        Email: info@4dcs.co.za<br>
-        Phone: +266 2232 3442 · +27 76 108 0024<br>
-        WhatsApp: +27 76 108 0024<br>
-        www.4dcs.co.za · AI Division: ai.4dcs.co.za
+        Email: <a href="mailto:info@4dcs.co.za">info@4dcs.co.za</a><br>
+        Phone: +266 2232 3442 · +266 5630 0091<br>
+        WhatsApp: +266 5630 0091<br>
+        <a href="https://www.4dcs.co.za">www.4dcs.co.za</a> · AI Division: <a href="https://ai.4dcs.co.za">ai.4dcs.co.za</a>
       </div>
     </div>
   </div>
