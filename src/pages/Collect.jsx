@@ -204,7 +204,9 @@ export default function Collect() {
   const loadRoutes = async () => {
     setRoutesLoading(true)
     try {
-      const { data, error } = await supabase.from('routes').select('*').order('route_name')
+      // Only approved routes are selectable for registration — proposed routes
+      // wait for RCO approval (see Dashboard routes workflow).
+      const { data, error } = await supabase.from('routes').select('*').eq('status', 'approved').order('route_name')
       if (error) throw error
       setRoutes(data || [])
     } catch (err) { console.error('Load routes:', err) }

@@ -38,17 +38,19 @@ The deployed bundle hash is whatever `curl https://cims.4dcs.co.za/ | grep asset
 ### Role model
 
 ```
-admin                 → full access, user management, Rates Master, direct delete
+admin                 → full access, user management, direct delete
 user (Mamokuena)      → editor + approver (special-cased via isMamokuena flag)
 clo, arco, rco, essm  → editor + approver
+assistant_clo         → editor (uploads + edits; edits go through approval)
 client                → view-only (legacy LLWDSP III viewer tier)
-assistant_clo, pm, ict_dmo → view-only
+pm, ict_dmo           → view-only
 ```
 
-Two flags drive almost all gating in the UI:
+Three flags drive almost all gating in the UI:
 
-- `canEdit  = !isViewOnly` — can edit field values
-- `canApprove = isAdmin || isMamokuena || ['clo','arco','rco','essm'].includes(role)` — can approve edit requests, mark payment status, edit Other Assets, see the Rates tab, merge PAPs
+- `canEdit  = !isViewOnly` — can edit field values, upload photos/documents/CAFs, propose routes, edit the Rates Master
+- `canApprove = isAdmin || isMamokuena || ['clo','arco','rco','essm'].includes(role)` — can approve edit requests, mark payment status, merge PAPs
+- `isRouteApprover = isAdmin || role === 'rco'` — can approve/reject proposed routes
 
 ### File-handling flow
 
@@ -58,7 +60,49 @@ Two flags drive almost all gating in the UI:
 
 ---
 
-## 3. What shipped in the latest session (2026-05-22)
+## 3a. What shipped in the latest session (2026-08-07)
+
+Client-requested permission changes, all in one commit set on
+`claude/cims-asset-verification-permissions-u8u8rh`:
+
+1. **assistant_clo is now an editor** across all four layers: frontend role
+   sets (`src/lib/supabase.js`, `Dashboard.jsx`), Express `EDITOR_ROLES`
+   (`server.cjs`), and the DB `is_editor()` helper. Assistant CLOs can now
+   upload pictures/documents/CAFs and edit values; their edits still go
+   through the edit-request approval workflow (they are not approvers).
+2. **Routes can be added by any editor, with an RCO approval step.** New
+   "Add Route" button in the dashboard routes view. RCO/admin additions go
+   live immediately; anyone else's insert as `status='pending'` and appear in
+   a "Routes Pending RCO Approval" strip where RCO/admin can approve/reject.
+   The `routes` table now carries the trail (`status`, `created_by(_name)`,
+   `reviewed_by(_name)`, `reviewed_at`, `review_note`) and the who-added trail
+   shows on route cards. Pending routes are excluded from all route pickers,
+   and Collect.jsx only offers approved routes. Notifications go to `rco` +
+   `Admin` roles on proposal, and back to the proposer on review.
+3. **Rates editable by any editor, with a full audit trail.** RLS on both
+   valuation tables relaxed from admin-only to `is_editor()`; the propagate
+   RPCs are now gated on `is_editor()` (they previously had NO gate — fixed
+   security hole). Every INSERT/UPDATE/DELETE on either rates table is
+   recorded in the new `rates_audit_log` table via SECURITY DEFINER triggers
+   (who, when, old → new), and the Rates Master modal has a new
+   "Change History" tab showing the last 100 changes. Rates button is now
+   visible to all editors (`canEdit`), not just approvers.
+4. **Total Compensation now actually follows the assets.** Root causes fixed:
+   Other Affected Assets values were never included in the total, and newly
+   added land-asset rows got blank (locked) rates so their subtotal stayed 0.
+   Now: `computeHouseholdTotal()` (land part + other assets + disturbance) is
+   the single client-side formula used by save, edit-request approval, and
+   merge; new land-asset rows auto-fill rates from `valuation_land_rates` by
+   (land_use, route_type), and changing land use re-pulls rates; the
+   valuation totals strip shows the Other Assets line; both propagate RPCs
+   recompute totals with the same formula (SQL helpers `land_assets_value()`
+   / `other_assets_value()`).
+
+DB changes are in `migrations/005_permissions_routes_rates.sql`, applied to
+the live project via Supabase MCP as migration `permissions_routes_rates`.
+The 24 pre-existing routes were grandfathered as `status='approved'`.
+
+## 3. What shipped in the previous session (2026-05-22)
 
 Commits listed newest-first:
 
