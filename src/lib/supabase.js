@@ -21,7 +21,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 // Role taxonomy (kept in sync with the system_users.role CHECK constraint)
 // ──────────────────────────────────────────────────────────────────────────────
 //   admin                         — full access, user management
-//   user                          — legacy field-surveyor role, preserved for Mamokuena
+//   user                          — legacy field-surveyor role
 //   client                        — legacy client tier, preserved (LLWDSP III view)
 //   clo, arco, rco, essm          — editor: can view + add/edit PAPs
 //   assistant_clo                 — editor: can upload photos/documents/CAFs and

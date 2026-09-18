@@ -379,7 +379,7 @@ export default function Collect() {
         if (bkErr) throw bkErr
       }
 
-      // Notify approvers (admins + Mamokuena). The Dashboard already listens for user_role='approver'.
+      // Notify approvers. The Dashboard already listens for user_role='approver'.
       await supabase.from('notifications').insert({
         user_role: 'approver',
         type: 'new_registration',

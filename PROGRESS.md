@@ -39,7 +39,7 @@ The deployed bundle hash is whatever `curl https://cims.4dcs.co.za/ | grep asset
 
 ```
 admin                 → full access, user management, direct delete
-user (Mamokuena)      → editor + approver (special-cased via isMamokuena flag)
+user                  → editor (legacy field-surveyor role)
 clo, arco, rco, essm  → editor + approver
 assistant_clo         → editor (uploads + edits; edits go through approval)
 client                → view-only (legacy LLWDSP III viewer tier)
@@ -49,7 +49,7 @@ pm, ict_dmo           → view-only
 Three flags drive almost all gating in the UI:
 
 - `canEdit  = !isViewOnly` — can edit field values, upload photos/documents/CAFs, propose routes, edit the Rates Master
-- `canApprove = isAdmin || isMamokuena || ['clo','arco','rco','essm'].includes(role)` — can approve edit requests, mark payment status, merge PAPs
+- `canApprove = isAdmin || ['clo','arco','rco','essm'].includes(role)` — can approve edit requests, mark payment status, merge PAPs
 - `isRouteApprover = isAdmin || role === 'rco'` — can approve/reject proposed routes
 
 ### File-handling flow

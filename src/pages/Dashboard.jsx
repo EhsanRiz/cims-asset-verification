@@ -80,16 +80,15 @@ export default function Dashboard() {
 
   // Role taxonomy (see src/lib/supabase.js):
   //   admin                                    → full access
-  //   user (Mamokuena)                          → editor (legacy approver)
+  //   user                                      → editor (legacy field-surveyor role)
   //   clo, arco, rco, essm                      → editor (can add/edit PAPs)
   //   assistant_clo                             → editor (edits go through approval)
   //   pm, ict_dmo, client                       → view-only
   const _role = (user?.role || '').toLowerCase()
   const isAdmin = _role === 'admin'
-  const isMamokuena = user?.full_name?.toLowerCase().includes('mamokuena') || user?.username?.toLowerCase().includes('mamokuena')
   const isViewOnly = ['pm', 'ict_dmo', 'client'].includes(_role)
   const canEdit = !isViewOnly  // admin, user, clo, arco, rco, essm, assistant_clo all get edit rights
-  const canApprove = isAdmin || isMamokuena || ['clo', 'arco', 'rco', 'essm'].includes(_role)
+  const canApprove = isAdmin || ['clo', 'arco', 'rco', 'essm'].includes(_role)
   // Route proposals need sign-off from an RCO (or admin) — see routes workflow.
   const isRouteApprover = isAdmin || _role === 'rco'
 
@@ -476,7 +475,7 @@ export default function Dashboard() {
         }
       })
 
-      // If user can approve (Admin or Mamokuena), save directly
+      // Approvers save directly; everyone else's edits go to the approval queue.
       if (canApprove) {
         const landAssets = Array.isArray(editedData.land_assets_json) ? editedData.land_assets_json : []
         // Derive total from the underlying inputs (land assets or legacy

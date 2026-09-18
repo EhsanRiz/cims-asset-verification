@@ -19,13 +19,11 @@ export default function Landing() {
   const navigate = useNavigate()
   const [pendingCount, setPendingCount] = useState(0)
 
-  // Approvers: admins + Mamokuena (legacy role='user' override) + editor roles from the GRM role system.
+  // Approvers: admins + the approving GRM roles. Keep in sync with canApprove in Dashboard.jsx.
   const _r = (user?.role || '').toLowerCase()
   const isApprover =
     _r === 'admin' ||
-    ['clo', 'arco', 'rco', 'essm'].includes(_r) ||
-    (user?.full_name || '').toLowerCase().includes('mamokuena') ||
-    (user?.username || '').toLowerCase().includes('mamokuena')
+    ['clo', 'arco', 'rco', 'essm'].includes(_r)
 
   useEffect(() => {
     if (!isApprover) return

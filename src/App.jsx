@@ -109,7 +109,7 @@ function ProtectedRoute({ children }) {
 }
 
 // Role-aware landing.
-//  - 'user' (Mamokuena, legacy field surveyor) lands on the Landing mode picker.
+//  - 'user' (legacy field surveyor) lands on the Landing mode picker.
 //  - All other roles (admin, clo, arco, rco, essm, assistant_clo, pm, ict_dmo, client) land on Dashboard.
 function RoleHome() {
   const { user } = useAuth()
