@@ -9,7 +9,8 @@ import {
   CreditCard, FileText, User, Printer, Edit2, 
   Save, Upload, MapPin, Camera, Check, XCircle, Building2, TreePine,
   Download, X, TrendingUp, Bell, CheckCircle, Clock, AlertCircle,
-  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw, Settings, Activity
+  Plus, Trash2, Eye, ScanLine, FileUp, ArrowRightLeft, RefreshCw, Settings, Activity,
+  ClipboardList
 } from 'lucide-react'
 
 // 4D Climate Solutions Color Scheme (Lipalo-inspired)
@@ -1706,6 +1707,17 @@ export default function Dashboard() {
               <span style={{ color: 'white', fontSize: '14px', fontWeight: '500' }}>{user?.full_name}</span>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '11px' }}>{ROLE_LABELS[(user?.role || '').toLowerCase()] || user?.role}{canApprove ? ' • Can Approve' : isViewOnly ? ' • View Only' : ''}</span>
             </div>
+            {/* Only the legacy 'user' role gets the Landing mode picker, so every
+                other editor had no route to the Collect wizard but the raw URL. */}
+            {canEdit && (
+              <button onClick={() => { window.location.hash = '#/collect' }}
+                title="Register a new PAP in the field survey form"
+                style={{ padding: '8px 12px', backgroundColor: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '8px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
+                onMouseOver={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+                onMouseOut={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}>
+                <ClipboardList size={16} /> New Survey
+              </button>
+            )}
             {canEdit && (
               <button onClick={() => setShowRatesModal(true)}
                 title="Manage valuation rates"
